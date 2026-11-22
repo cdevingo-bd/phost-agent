@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phost-agent"
+version = "0.1.0.dev0"
+description = "An agent layer for phost: briefs and stage cards, a ceiling gate, a tiered funnel, a memo, a device lease and budgets around any proposer. No LLM calls are built in."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+dependencies = ["phost", "phost-lab", "phost-score"]
+
+[project.optional-dependencies]
+author = ["phost-author"]
+test = ["pytest>=7"]
+
+[project.scripts]
+phost-agent = "phost_agent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
