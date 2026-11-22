@@ -86,7 +86,7 @@ def task_brief(task: Task, world: World, gate: Gate | None, budget: Budget | Non
         budget=(budget or Budget()).to_dict(),
         rules=["a candidate proposed twice is answered from the memo and still counts as an attempt",
                "a source candidate has no params; an implementation candidate's params are validated against its specs",
-               "the layer makes no network calls; neither may a candidate"],
+               "a candidate makes no network calls and runs without network access where it is sandboxed"],
     )
 
 

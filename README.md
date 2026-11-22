@@ -1,17 +1,28 @@
 # phost-agent
 
-An agent layer for [phost](https://github.com/cdevingo-bd/phost): what an agent is told about a stage, what a proposal must
-pass before it earns a timed run, what the search remembers, who may use the device, and what it may spend. **It calls no
-model.** A proposer is anything that returns the next candidate: a script, a baseline search, or a program that wraps your own
-agent and keeps its own keys.
+An agent layer for [phost](https://github.com/cdevingo-bd/phost). Its centre is an **arena**: language models, behind any provider
+(the Claude Code on your machine with no API key, the Claude API, OpenAI or anything that speaks its protocol, a local model, a program of
+your own), compete on a leaderboard for the fastest
+simulation step on a scene. Nobody tells them what to try. Each is given the same facts (where the step spends its time, what every
+stage is, how entries are judged, the live board), then takes turns: look at a stage, read a rival's entry, check a graph, enter one,
+leave. A graph can replace any stages, with registered implementations or with code the model writes. The arena only keeps the rules
+(contract checks, timing against the host's own step with the device to itself, budgets) and the board, which is `phost-score`'s.
+
+Around it are the pieces that make that safe to run: a tiered funnel that keeps a wrong or hopeless entry from earning a timed run, a
+content-addressed memo, a per-device lease, and budgets. The same machinery also runs a **focused search** on one stage, driven by a
+baseline, a program or a model.
 
 ```
+phost-agent llms                                                   # the model providers there are, and what each needs
+phost-agent arena --scene chain256:ringing \
+    --contestant opus=claude-code:opus --contestant sonnet=claude-code:sonnet \
+    --turns 20 --submits 4 --tokens 200000                         # models compete; the board is printed at the end
+phost-agent prompt --scene chain256:ringing --stage effective.solve   # what a model is sent first in a focused search (sends nothing)
+phost-agent run --scene chain256:ringing --stage effective.solve \
+    --attempts 12 --proposer llm:anthropic                         # a focused search on one stage, driven by a model
 phost-agent card effective.solve                                   # what a stage is, as Markdown (or --json)
 phost-agent ceiling --scene chain256:ringing --stage effective.solve   # tier 0: is there anything to gain? (measures, then remembers)
-phost-agent brief --scene chain256:ringing --stage effective.solve     # the brief an agent is given
 phost-agent check proposal.json --scene chain256:ringing --stage effective.solve   # one candidate through tiers 1-3
-phost-agent run --scene chain256:ringing --stage effective.solve \
-    --plugin phost_author.expression_impls --proposer coordinate --attempts 8
 phost-agent status                                                 # funnel, memo hit rate, spend, whether the record is intact
 ```
 
@@ -66,8 +77,87 @@ and the `tokens` it cost to produce.
   a time around the best result so far (a number at zero is not scaled: there is no scale to scale it by). Anything smarter
   should beat it. Many implementations have defaults at zero, so start those from a script.
 * `CommandProposer("program args")` runs any program: it gets `{"brief", "history"}` as JSON on stdin and prints
-  `{"proposal": {...}, "tokens": 1200}` or `{"stop": "why"}`. An agent that calls a model wraps itself in one of these. A program
+  `{"proposal": {...}, "tokens": 1200}` or `{"stop": "why"}`. An agent of your own wraps itself in one of these. A program
   that fails, times out or prints something else costs an attempt and the loop goes on.
+* `LLMProposer(client)` is a language model (next section).
+
+## The arena
+
+```
+phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--closed]
+```
+
+Contestants take turns in a fixed rotation, one action each, so each sees what the others did before it moves and the one device is
+never shared by two timed runs. A turn is a model call. The scarce thing is the timed run (`--submits`, per contestant); checks cost
+a turn and nothing else. Entries go to the same ledger as everything else in `phost-score`, labelled with the contestant's name, so
+`phost-score board` and the dashboard's Results screen rank them with every other run.
+
+**What a contestant is told:** the scene; where the host's own step spends its time (a measurement, with the most each stage could
+give); what every stage is and which implementations exist; the rules of judging; the actions; its budget; the board. **What it is not
+told:** what to try, in what order, or how to search. There is no coaching in the prompt (`tests/test_arena.py` checks that).
+
+**What it can do:** `look` at a stage's card or at a rival's entry (graph, parameters, source: the contest is open unless `--closed`);
+`check` a graph (the contract checks only); `submit` one (check, time, rank, and be told where it landed); `done`. A graph replaces any
+set of stages, each with a registered implementation and parameters or with the source of a runtime class. A second model that builds
+on the first's entry is a legitimate move, and is why the contest is open by default.
+
+**What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
+class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate
+one; a model-changing entry only against entries replacing the same stages). The board a contestant sees is for the largest world
+count. Timing flagged unreliable is not ranked. Only the latest run of the same graph under a name counts, so repeating an entry
+re-measures it instead of letting noise win.
+
+**What it costs, and what leaves the machine:** as in the focused search below. Every token sent and received counts against
+`--tokens`, per contestant; a failed call costs a turn; a failure that would repeat (no key, an unknown model) removes that
+contestant and the others play on. Only the prompts go out, to the providers you named; the home directory, user name and state
+directory are scrubbed from everything sent, each time. Tier 4 (the timed run) is not sandboxed: a source entry has passed the
+sandboxed checks, which is evidence about its behaviour on those inputs and not a proof about anything else, so do not enter a model
+that writes source on a machine whose files or network you care about.
+
+## Language models
+
+`--proposer llm:<provider>[:<model>]` puts a model in a focused search's proposer seat, and `--contestant` takes the same provider specs. Every provider is reduced to one small interface
+(`complete(system, messages, max_tokens) -> Reply`), so trying another model is another argument, not other code.
+
+| provider | reaches | needs |
+| --- | --- | --- |
+| `claude-code[:model]` | Claude through the Claude Code on this machine: your own login, **no API key**, counted against your plan's usage. The model is the CLI's alias (`opus`, `sonnet`) or an id; omitted, whatever your Claude Code is set to | Claude Code installed and logged in |
+| `anthropic[:model]` | Claude through the API, with the official SDK, if you would rather pay per token; the model defaults to `claude-opus-5-5`, name another by its exact id | `pip install 'phost-agent[anthropic]'`; `ANTHROPIC_API_KEY` or `ant auth login` |
+| `openai:<model>` | OpenAI chat completions | `OPENAI_API_KEY` (and `OPENAI_BASE_URL` to route elsewhere) |
+| `ollama:<model>` | a local Ollama over its OpenAI-compatible endpoint | `ollama serve` |
+| `compat:<model>` | any OpenAI-compatible server: vLLM, LM Studio, OpenRouter, a gateway | `--llm-option base_url=https://host/v1`; `LLM_API_KEY` if it wants one |
+| `cmd:<program>` | anything else: the prompt goes to the program's stdin and its stdout is the answer | the program |
+
+**Claude Code as a contestant.** Each call runs `claude -p` as a plain text model: no tools (it cannot touch a file or run a command), no
+MCP servers, no skills, no saved session, our system prompt in place of the coding agent's, from an empty directory so none of your
+projects, `CLAUDE.md` or memory is loaded. `ANTHROPIC_API_KEY` is removed from its environment so it cannot quietly bill the API
+(`--llm-option keep_api_key=true` keeps it). It is not `--bare`, which would ignore your login and ask for a key. Each call starts the
+CLI, so a turn takes a few seconds longer than an API call, and a long contest uses your plan's allowance: size `--turns` to it.
+
+`--llm-option KEY=VALUE` (repeatable) passes a provider its own options (`effort=low` for Claude, `max_tokens_field=...`,
+`timeout=...`, and `body.NAME=VALUE` to put any extra field in an OpenAI-style request); a name no provider knows is an error, so a
+typo does not pass silently. `--llm-max-tokens` bounds one reply (default 16000; a model's thinking counts against it). A new
+provider is a class with `name`, `model` and `complete`, added by `register_provider` from a module you name with `--llm-plugin`
+(it defines `register_llm(register_provider)`).
+
+**What it is told.** The system prompt is fixed instructions plus the rendered brief (the stage card, the ceiling, what a win is,
+the funnel, the budget) and does not change during a search, so a provider that caches a prefix pays for it once. Each turn adds
+the results so far, one line per candidate: what it was, the tier it stopped at and why, or how fast it ran and how accurate.
+The source of the latest source candidate is included, so a model can edit its own code. It answers with one JSON object
+(`{"proposal": ...}` or `{"stop": "why"}`), source in a `python` block after it. `phost-agent prompt` prints the first call.
+
+**What it costs.** A proposal is charged every token sent and received, cached or not, so `--tokens` bounds the traffic and
+not the bill (the run's last line splits out what the provider served from its cache). A provider that reports no usage is
+estimated at about four characters a token, and says so. An answer that cannot be used is sent back once with the reason; the two
+calls are one attempt. A second failure, a reply cut off at the limit, a refusal, a rate limit and a dropped connection each cost
+the attempt and what they spent, and the search goes on. A failure that would repeat (no key, a refused credential, an unknown
+model) ends it as `stopped`, without spending an attempt on it.
+
+**What leaves the machine.** Only the system prompt and the turns above, to the provider you named. The home directory, the user
+name and the state directory are replaced before anything is sent (the brief holds none of them; this is for the day it does).
+A key is read from the environment and never from an argument, so it is not in a shell history or a journal, and an OpenAI-style
+client refuses to send one over plain `http` to another machine. The journal records which provider and model drove a search
+(`llm:anthropic:claude-opus-5-5`) and the tokens, not what was said.
 
 ## The memo
 
@@ -116,8 +206,8 @@ are asked for before any of them is answered, so the proposer does not see their
   about anything else. Do not point an agent that writes source at a machine whose files or network you care about.
 * Entries written to the score ledger are `self-reported`: measured here, by this process. Nothing has checked them independently.
   The journal and the ledger are hash chains: they catch accidents and careless edits, not someone who can rewrite the whole file.
-* The layer makes no network calls and neither should a candidate. It never puts your name, paths or scene contents in a request,
-  because it makes none.
+* The only network traffic this package makes is a model provider's request, and only if you chose one (above). A candidate
+  should make none: tiers 2 and 3 run a source candidate without network access when the sandbox is there.
 
 ## The record
 
@@ -140,14 +230,18 @@ scene's host (residual 0.075 against a gate of 1e-4) and never earned a run; tha
 `verify_structure`, which a proposer starting from the defaults does not know to do. Three attempts is too few for the
 baseline to have tried it.
 
-Not done: no MJX engine (there is a JAX chain, `jaxchain`, and that is not MuJoCo); no model is called by this package, so how well
-an LLM agent does with these briefs is not something it can tell you; fan-out was exercised on the CPU engines only, and no source candidate has been timed on a GPU scene.
+Not done: no MJX engine (there is a JAX chain, `jaxchain`, and that is not MuJoCo). **No model has been run through this layer
+against a real service.** The model path, the focused search and the arena are tested end to end with the real loop, funnel, scene and CLI, but against programs standing in
+for the models, a real HTTP server on this machine speaking the OpenAI protocol, a stand-in for the Claude SDK and a stand-in `claude`
+executable (the flags it is given are checked against this machine's `claude --help`); neither Claude provider has been called live, and how well any model does with these briefs, or which does better, is unmeasured. Fan-out
+was exercised on the CPU engines only, and no source candidate has been timed on a GPU scene. The server-side refusal fallback
+for Claude is not enabled: a refusal is a failed attempt.
 
 ## Tests
 
 ```
 pip install -e '.[test]'
-pytest                    # ~170 tests; the real-simulator ones use the NumPy chain engine and need no GPU
+pytest                    # ~240 tests; the real-simulator ones use the NumPy chain engine and need no GPU, none reaches a model service
 ```
 
 `tests/test_jax_scene.py` runs the layer on the JAX engine's scene and is skipped without `jax` (the lab's own JAX tests live in a

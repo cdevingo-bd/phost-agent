@@ -24,7 +24,7 @@ from .ceiling import Gate, check_ceiling
 from .funnel import Funnel
 from .journal import Journal
 from .outcome import ACCEPTED, MEASURED, REJECTED, Outcome
-from .proposers import Proposer, ProposerError
+from .proposers import Proposer, ProposerError, ProposerFatal
 from .proposal import Proposal
 from .task import Task
 
@@ -32,7 +32,7 @@ from .task import Task
 @dataclass
 class Report:
     task: Task
-    status: str                         # refused | budget | stalled | finished
+    status: str                         # refused | budget | stalled | finished | stopped (the proposer could not go on)
     reason: str
     gate: Gate | None
     best: Outcome | None                # the fastest accepted outcome
@@ -95,17 +95,25 @@ def run_loop(task: Task, proposer: Proposer, *, budget: Budget = Budget(), journ
             return finish("stalled" if why.startswith("stalled") else "budget", why, best)
         wanted = min(budget.workers, budget.attempts - spend.attempts)
         proposals: list[Proposal | ProposerError] = []
+        fatal: ProposerFatal | None = None
         for _ in range(wanted):
             try:
                 proposal = proposer.propose(brief, outcomes)
+            except ProposerFatal as error:
+                fatal = error
+                break
             except ProposerError as error:
                 proposals.append(error)
                 break
             if proposal is None:
                 break
             proposals.append(proposal)
+        if fatal is not None and not proposals:
+            spend.tokens += fatal.tokens
+            return finish("stopped", f"the proposer cannot continue: {fatal}", best)
         if not proposals:
-            return finish("finished", "the proposer has nothing more to try", best)
+            why = getattr(proposer, "stop_reason", "")
+            return finish("finished", "the proposer has nothing more to try" + (f": {why}" if why else ""), best)
         for outcome in _evaluate(funnel, proposals, spend.attempts, budget, journal):
             spend.attempts += 1
             spend.tokens += outcome.proposal.tokens if outcome.proposal else 0
@@ -119,6 +127,9 @@ def run_loop(task: Task, proposer: Proposer, *, budget: Budget = Budget(), journ
                 spend.stalled += 1
             journal.append("attempt", task_id=task.id, **outcome.to_dict(), improved=improved)
             emit(dict(event="attempt", outcome=outcome.to_dict(), improved=improved))
+        if fatal is not None:
+            spend.tokens += fatal.tokens
+            return finish("stopped", f"the proposer cannot continue: {fatal}", best)
 
 
 def _evaluate(funnel: Funnel, proposals: list, first_attempt: int, budget: Budget, journal: Journal) -> list[Outcome]:
@@ -133,7 +144,7 @@ def _evaluate(funnel: Funnel, proposals: list, first_attempt: int, budget: Budge
     for offset, item in enumerate(proposals):
         attempt = first_attempt + offset + 1
         if isinstance(item, ProposerError):
-            stub = Proposal(funnel.task.stage, impl="(proposer failed)")
+            stub = Proposal(funnel.task.stage, impl="(proposer failed)", tokens=item.tokens)
             outcomes.append(Outcome(attempt, stub, "", "none", REJECTED, str(item)))
         elif id(item) in prepared:
             outcomes.append(funnel.finish(prepared[id(item)], attempt))

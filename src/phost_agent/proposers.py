@@ -1,11 +1,13 @@
-"""Who proposes. The layer calls no model: a proposer is anything that turns a brief and a history into the next candidate.
+"""Who proposes: anything that turns a brief and a history into the next candidate.
 
     ScriptedProposer     replays a list of proposals (a recorded session, a test, a hand-written sweep)
     CoordinateProposer   a baseline with no learning: the defaults of every implementation of the stage, then one parameter
                          at a time around the best result so far. Anything smarter should beat it
     CommandProposer      any program: it gets ``{"brief", "history"}`` as JSON on stdin and answers ``{"proposal": {...}}``
-                         (or ``{"stop": "why"}``) on stdout. An agent that calls a model wraps itself in one of these, so the
-                         keys and the traffic stay its own
+                         (or ``{"stop": "why"}``) on stdout. An agent of your own wraps itself in one of these
+    LLMProposer          a language model (``phost_agent.llm``): any provider behind one small client interface (Claude, any
+                         OpenAI-compatible server, a local model, or a program), told the brief and how each earlier
+                         candidate fared, answering with the next one
 
 A proposer sees only what the brief and the history show: the stage's card, the ceiling, and how each earlier proposal fared.
 """
@@ -27,7 +29,17 @@ from .proposal import Proposal
 
 
 class ProposerError(RuntimeError):
-    """The proposer failed to produce a proposal (the loop records the attempt as a failure and goes on)."""
+    """The proposer failed to produce a proposal (the loop records the attempt as a failure and goes on). ``tokens`` is what
+    the failed call cost, which still counts against the token budget."""
+
+    def __init__(self, message: str = "", *, tokens: int = 0):
+        super().__init__(message)
+        self.tokens = tokens
+
+
+class ProposerFatal(ProposerError):
+    """The proposer cannot go on (no key, a credential refused, an unknown model): every further call would fail the same way,
+    so the loop ends the search instead of spending its attempts on it."""
 
 
 class Proposer(Protocol):

@@ -10,6 +10,8 @@ Kinds of record (``entry["kind"]``):
     ceiling   how much of the step a stage takes on a scene: the most a replacement could gain
     tier      one tier's outcome for one candidate on one scene (this is what the memo reads)
     attempt   one proposal, how far it got, and what it cost
+    arena     a contest began or ended (who, on which scene, the final board), or one contestant's turn in it
+    submission a graph a contestant had timed and ranked, whole (source included), so a rival may read it
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from phost_score.entry import json_safe
 
 from .paths import default_journal
 
-KINDS = ("task", "ceiling", "tier", "attempt")
+KINDS = ("task", "ceiling", "tier", "attempt", "arena", "submission")
 
 
 class Journal:

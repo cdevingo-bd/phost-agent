@@ -9,6 +9,7 @@ from pathlib import Path
 
 from phost import ContractError
 
+from .arena import Arena, ArenaTask, Contestant
 from .budget import Budget
 from .cards import render_brief, render_card, stage_card, task_brief
 from .ceiling import check_ceiling, recorded_gate
@@ -17,7 +18,7 @@ from .journal import Journal
 from .lease import Lease
 from .loop import run_loop
 from .proposal import Proposal
-from .proposers import CommandProposer, CoordinateProposer, ScriptedProposer
+from .proposers import CommandProposer, CoordinateProposer, ProposerError, ScriptedProposer
 from .status import render_status, summarize
 from .task import Task, resolve
 
@@ -108,7 +109,12 @@ def _proposer(args, funnel_registry, task: Task):
         return ScriptedProposer(json.loads(Path(rest).read_text()))
     if kind == "command" and rest:
         return CommandProposer(rest, timeout=args.proposer_timeout)
-    raise ContractError(f"--proposer is 'coordinate', 'script:FILE' or 'command:PROGRAM', not {spec!r}")
+    if kind == "llm" and rest:
+        from .llm import LLMProposer, load_plugin, make_client, parse_options
+        for module in args.llm_plugin:
+            load_plugin(module)
+        return LLMProposer(make_client(rest, parse_options(args.llm_option)), max_tokens=args.llm_max_tokens)
+    raise ContractError(f"--proposer is 'coordinate', 'script:FILE', 'command:PROGRAM' or 'llm:PROVIDER[:MODEL]', not {spec!r}")
 
 
 def _what(proposal: Proposal, registry) -> str:
@@ -147,10 +153,73 @@ def cmd_run(args) -> int:
     spend = report.spend
     print(f"spent: {spend.attempts} attempts, gpu {spend.gpu_seconds:.1f} s, cpu {spend.cpu_seconds:.1f} s, tokens {spend.tokens}, "
           f"{spend.memo_hits} from the memo")
+    usage = getattr(proposer, "usage", None)
+    if usage:
+        print(f"{proposer.name}: {usage['calls']} calls, {usage['input_tokens']} tokens in ({usage['cached_tokens']} from its cache), "
+              f"{usage['output_tokens']} out" + (" (estimated: this provider does not report usage)" if usage["estimated"] else ""))
     if report.best:
         print(f"best: {report.best.proposal.summary()}  {report.best.speedup:.3f}x")
     if args.out:
         Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+    return 0
+
+
+def _contestants(args) -> list[Contestant]:
+    from .llm import LLMProposer, load_plugin, make_client, parse_options        # noqa: F401  (LLMProposer: same provider specs)
+    for module in args.llm_plugin:
+        load_plugin(module)
+    options, out = parse_options(args.llm_option), []
+    for spec in args.contestant:
+        name, _, rest = spec.partition("=")
+        if not rest or ":" in name or "/" in name:                # no "NAME=": the contestant is named after its provider and model
+            name, rest = "", spec
+        client = make_client(rest, options)
+        out.append(Contestant(name or f"{client.name}:{client.model}", client))
+    return out
+
+
+def cmd_arena(args) -> int:
+    task = ArenaTask(scene=args.scene, worlds=args.worlds, steps=args.steps, launches=args.launches, repeats=args.repeats,
+                     driver=args.driver, plugins=tuple(args.plugin), scene_modules=tuple(args.scene_module),
+                     scene_dirs=tuple(args.scene_dir), run_timeout=args.run_timeout)
+
+    def show(event):
+        if event["event"] == "turn":
+            first = " ".join(event["text"].split())[:110]
+            print(f"[{event['contestant']}] turn {event['turn']:<3} {event['action']:<10} {first}")
+        elif event["event"] == "left":
+            print(f"[{event['contestant']}] leaves: {event['why']}")
+    arena = Arena(task, _contestants(args), journal=_journal(args), allow_unsandboxed=args.allow_unsandboxed, turns=args.turns,
+                  submits=args.submits, tokens=args.tokens, open_code=not args.closed, max_tokens=args.llm_max_tokens, on_event=show)
+    report = arena.run()
+    print("\n" + arena.board_text())
+    for c in report.contestants:
+        best = f"{c['best']['speedup']:.3f}x ({c['best']['klass']})" if c["best"] else "no ranked entry"
+        print(f"{c['name']}: {best}; {c['turns']} turns, {c['submits']} timed runs, {c['tokens']} tokens, left: {c['left']}")
+    if args.out:
+        Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+    return 0
+
+
+def cmd_prompt(args) -> int:
+    """What a language model would be sent first for this task. Sends nothing."""
+    from .llm import estimate_tokens, redact, system_prompt, turn_prompt
+    task, journal = _task(args), _journal(args)
+    world = resolve(task)
+    brief = task_brief(task, world, recorded_gate(task, journal, registry=world.registry), _budget(args))
+    system, turn = redact(system_prompt(brief)), redact(turn_prompt(brief, []))
+    print("=== system (the same on every turn: providers that cache a prefix cache this) ===\n" + system)
+    print("=== first turn ===\n" + turn)
+    print(f"\nabout {estimate_tokens(system) + estimate_tokens(turn)} tokens in the first call "
+          f"({estimate_tokens(system)} system, {estimate_tokens(turn)} turn); later turns add one line per earlier candidate.")
+    return 0
+
+
+def cmd_llms(args) -> int:
+    from .llm import providers
+    for provider in providers():
+        print(f"{provider.name:<12} {provider.doc}" + (f"\n{'':<12} needs: {provider.needs}" if provider.needs else ""))
+    print("\nuse one with: phost-agent run ... --proposer llm:<provider>[:<model>]   (options: --llm-option KEY=VALUE)")
     return 0
 
 
@@ -193,6 +262,39 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_brief)
 
+    p = sub.add_parser("arena", help="language models compete on the leaderboard for a scene; nothing tells them how")
+    p.add_argument("--scene", required=True)
+    p.add_argument("--contestant", action="append", required=True, metavar="[NAME=]PROVIDER[:MODEL]",
+                   help="a model to enter (see `phost-agent llms`); repeat for each rival, e.g. --contestant opus=anthropic "
+                        "--contestant local=ollama:llama3")
+    p.add_argument("--worlds", type=_csv_ints, default=(1, 8), help="comma-separated world counts a timed run measures")
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--launches", type=int, default=5)
+    p.add_argument("--repeats", type=int, default=11)
+    p.add_argument("--driver", default="graph")
+    p.add_argument("--plugin", action="append", default=[], help="a module with register(registry); repeatable")
+    p.add_argument("--scene-module", action="append", default=[])
+    p.add_argument("--scene-dir", action="append", default=[])
+    p.add_argument("--run-timeout", type=float, default=900.0)
+    p.add_argument("--turns", type=int, default=30, help="model calls each contestant may make")
+    p.add_argument("--submits", type=int, default=6, help="timed runs each contestant may use (the scarce thing)")
+    p.add_argument("--tokens", type=int, default=None, help="tokens each contestant may spend (sent and received)")
+    p.add_argument("--closed", action="store_true", help="the board shows scores only; contestants cannot read each other's entries")
+    p.add_argument("--llm-option", action="append", default=[], metavar="KEY=VALUE", help="a provider option, applied to every contestant")
+    p.add_argument("--llm-max-tokens", type=int, default=16000)
+    p.add_argument("--llm-plugin", action="append", default=[])
+    p.add_argument("--allow-unsandboxed", action="store_true")
+    p.add_argument("--out", help="write the final report as JSON")
+    p.set_defaults(fn=cmd_arena)
+
+    p = sub.add_parser("prompt", help="what a language model would be sent first for a task (sends nothing)")
+    _add_task_arguments(p)
+    budget_arguments(p)
+    p.set_defaults(fn=cmd_prompt)
+
+    p = sub.add_parser("llms", help="the language-model providers there are, and what each needs")
+    p.set_defaults(fn=cmd_llms)
+
     p = sub.add_parser("ceiling", help="tier 0: how much could any replacement gain (measures, then remembers)")
     _add_task_arguments(p)
     p.add_argument("--refresh", action="store_true")
@@ -210,8 +312,13 @@ def main(argv=None) -> int:
     p = sub.add_parser("run", help="run the loop: propose, funnel, record, until the budget says stop")
     _add_task_arguments(p)
     budget_arguments(p)
-    p.add_argument("--proposer", default="coordinate", help="coordinate | script:FILE | command:PROGRAM")
+    p.add_argument("--proposer", default="coordinate",
+                   help="coordinate | script:FILE | command:PROGRAM | llm:PROVIDER[:MODEL] (see `phost-agent llms`)")
     p.add_argument("--proposer-timeout", type=float, default=300.0)
+    p.add_argument("--llm-option", action="append", default=[], metavar="KEY=VALUE",
+                   help="a provider's own option (effort=low, base_url=..., body.temperature=0.2); repeatable")
+    p.add_argument("--llm-max-tokens", type=int, default=16000, help="the longest reply a model may give (thinking counts against it)")
+    p.add_argument("--llm-plugin", action="append", default=[], help="a module with register_llm(register_provider); repeatable")
     p.add_argument("--impl", action="append", default=[], help="restrict the coordinate proposer to these implementations")
     p.add_argument("--allow-unsandboxed", action="store_true")
     p.add_argument("--refresh", action="store_true", help="ignore the memo and the recorded ceiling")
@@ -231,7 +338,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     try:
         return args.fn(args)
-    except (ContractError, ValueError, OSError) as error:
+    except (ContractError, ProposerError, ValueError, OSError) as error:
         print(f"phost-agent: {error}", file=sys.stderr)
         return 1
 

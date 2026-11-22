@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "phost-agent"
 version = "0.1.0.dev0"
-description = "An agent layer for phost: briefs and stage cards, a ceiling gate, a tiered funnel, a memo, a device lease and budgets around any proposer. No LLM calls are built in."
+description = "An agent layer for phost: an arena where language models, behind any provider, compete on a leaderboard for the fastest simulation step; plus a tiered funnel, memo, device lease and budgets."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -13,6 +13,7 @@ dependencies = ["phost", "phost-lab", "phost-score"]
 
 [project.optional-dependencies]
 author = ["phost-author"]
+anthropic = ["anthropic"]            # only the Claude provider needs an SDK; the others use the standard library
 test = ["pytest>=7"]
 
 [project.scripts]
