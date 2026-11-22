@@ -5,7 +5,7 @@ An agent layer for [phost](https://github.com/cdevingo-bd/phost). Its centre is 
 your own), compete on a leaderboard for the fastest
 simulation step on a scene. Nobody tells them what to try. Each is given the same facts (where the step spends its time, what every
 stage is, how entries are judged, the live board), then takes turns: look at a stage, read a rival's entry, check a graph, enter one,
-leave. A graph can replace any stages, with registered implementations or with code the model writes. The arena only keeps the rules
+and go on until the budget is spent. A graph can replace any stages, with registered implementations or with code the model writes. The arena only keeps the rules
 (contract checks, timing against the host's own step with the device to itself, budgets) and the board, which is `phost-score`'s.
 
 Around it are the pieces that make that safe to run: a tiered funnel that keeps a wrong or hopeless entry from earning a timed run, a
@@ -84,8 +84,11 @@ and the `tokens` it cost to produce.
 ## The arena
 
 ```
-phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--closed]
+phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--closed] [--dash]
 ```
+
+`--dash` also starts phost-dash on this machine's loopback over the same state (`$PHOST_HOME`), prints its link before the first turn
+and keeps it up after the contest until Ctrl-C. Without it, the dashboard is a separate process: `phost-dash --state <the state dir>`.
 
 Contestants take turns in a fixed rotation, one action each, so each sees what the others did before it moves and the one device is
 never shared by two timed runs. A turn is a model call. The scarce thing is the timed run (`--submits`, per contestant); checks cost
@@ -98,7 +101,12 @@ told:** what to try, in what order, or how to search. There is no coaching in th
 
 **What it can do:** `look` at a stage's card or at any entry on the board (a rival's: graph, parameters, source, while the contest is open, unless `--closed`;
 one recorded outside the contest, such as a person's or an earlier run's: graph and parameters, since the ledger does not keep source);
-`check` a graph (the contract checks only); `submit` one (check, time, rank, and be told where it landed); `done`. A graph replaces any
+`check` a graph (the contract checks only); `submit` one (check, time, rank, and be told where it landed). There is no way to leave: a
+contestant plays until its turns, its timed runs or its tokens are spent, or until a failure that cannot be retried (no key, an unknown
+model) removes it. In an open contest every `check` anyone runs is posted, passed or failed, with who ran it and the reason it failed: each
+turn shows the others' latest ten (`--feed N`, 0 for none) as one line each, and `look` with `"what": "attempt"` and an id gives the
+source and the whole reason. A graph checked before, by anyone, is answered with who checked it and what came of it. `--closed` posts
+and shows nothing; the checks are still in the journal. A graph replaces any
 set of stages, each with a registered implementation and parameters or with the source of a runtime class. A second model that builds
 on the first's entry is a legitimate move, and is why the contest is open by default.
 
@@ -231,10 +239,16 @@ scene's host (residual 0.075 against a gate of 1e-4) and never earned a run; tha
 `verify_structure`, which a proposer starting from the defaults does not know to do. Three attempts is too few for the
 baseline to have tried it.
 
-Not done: no MJX engine (there is a JAX chain, `jaxchain`, and that is not MuJoCo). **No model has been run through this layer
-against a real service.** The model path, the focused search and the arena are tested end to end with the real loop, funnel, scene and CLI, but against programs standing in
+Models in the arena, once, by hand (2026-11-22, `chain256:ringing`, Claude Code's opus and sonnet through the `claude-code` provider,
+no API key): they read the stage card, wrote source, checked it and timed it. The entries that ranked were slower than the host's own
+step (0.07x to 0.55x), so no win is claimed, and nothing here says which model does better. Much of their early turns went to learning
+what a runtime looks like from failing checks, because the card did not say; it now does, and the checks are shared (the feed above).
+That was before those two changes, so their effect on turns is unmeasured.
+
+Not done: no MJX engine (there is a JAX chain, `jaxchain`, and that is not MuJoCo). **The Claude API, OpenAI-protocol and cmd providers
+have not been called against a real service.** They, the focused search and the arena are tested end to end with the real loop, funnel, scene and CLI, but against programs standing in
 for the models, a real HTTP server on this machine speaking the OpenAI protocol, a stand-in for the Claude SDK and a stand-in `claude`
-executable (the flags it is given are checked against this machine's `claude --help`); neither Claude provider has been called live, and how well any model does with these briefs, or which does better, is unmeasured. Fan-out
+executable (the flags it is given are checked against this machine's `claude --help`); only the `claude-code` provider has been called live. Fan-out
 was exercised on the CPU engines only, and no source candidate has been timed on a GPU scene. The server-side refusal fallback
 for Claude is not enabled: a refusal is a failed attempt.
 

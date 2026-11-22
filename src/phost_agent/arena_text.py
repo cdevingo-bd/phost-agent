@@ -38,9 +38,9 @@ Reply with one JSON object per turn:
 
   {"action": "look", "what": "card", "stage": "<stage>"}       a stage's full card: ports, invariants, implementations, parameters
   {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: its stages, parameters and source
+  {"action": "look", "what": "attempt", "id": "<attempt id>"}  a check anyone ran: its source and the whole reason it failed (open contests)
   {"action": "check", "graph": GRAPH}                          the contract checks only
   {"action": "submit", "graph": GRAPH, "note": "<why>"}        check, time and rank it: uses one of your timed runs
-  {"action": "done"}                                           leave the contest
 
   GRAPH = {"stages": {"<stage>": {"impl": "<registered id>", "params": {"<name>": <value>}}  or  {"entry": "Runtime"}}}
 
@@ -93,12 +93,16 @@ def facts_text(report: Mapping[str, Any] | None, scene: str, worlds: int) -> str
 
 
 def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str, scene: str, worlds: Sequence[int],
-                  turns: int, submits: int, open_code: bool) -> str:
+                  turns: int, submits: int, open_code: bool, feed: bool = True) -> str:
     visibility = ("Everything you submit, source included, is visible to the other contestants, as theirs is to you." if open_code
                   else "Entries show on the board with what they scored, but not what they submitted.")
+    if open_code and feed:
+        visibility += (" So is every check anyone runs, passed or failed: each turn you are shown the others' latest ones under the "
+                       "board, and you can look at any by its id.")
     rules = RULES.format(classes=classes_text(registry, stages), visibility=visibility)
     return (INTRO + f"\nScene: {scene}. World counts timed: {', '.join(map(str, worlds))}; the board you see is for {max(worlds)} worlds.\n"
-            f"Your budget: {turns} turns and {submits} timed runs.\n\n" + facts + "\n\nStages you can replace:\n"
+            f"Your budget: {turns} turns and {submits} timed runs. The contest ends for you when either is used up; "
+            f"there is no other way to leave.\n\n" + facts + "\n\nStages you can replace:\n"
             + stage_index(registry, stages) + "\n\n" + rules + "\n" + ACTIONS)
 
 

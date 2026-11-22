@@ -59,14 +59,20 @@ def stage_card(registry: phost.Registry, stage: str) -> dict[str, Any]:
     return card
 
 
-def _skeleton(card: Mapping[str, Any]) -> str:
+def source_skeleton(card: Mapping[str, Any]) -> str:
     ports = "".join(f"\n        #   {p['name']:<14} {p['role']:<6} {p['dtype']:<8} shape {tuple(p['shape'])}" for p in card["ports"])
     entry = card["entry"] or "run"
     ref = ""
     if card["reference"] == "impl":
         ref = "\n\ndef reference(inputs, params):\n    \"\"\"Your own float64 version of what the runtime computes: outputs by port name.\"\"\"\n    ..."
+    dims = {d.rstrip("+") for p in card["ports"] for d in p["shape"] if isinstance(d, str)}
+    padded = any(isinstance(d, str) and d.endswith("+") for p in card["ports"] for d in p["shape"])
+    notes = "\n        # system.<port> is the array for that port: " + ", ".join(f"system.{p['name']}" for p in card["ports"])
+    if "nv" in dims:
+        notes += ("\n        # nv is self.host.facts().nv" + (" (also .world_count). A trailing + (nv+) means at least that size: hosts "
+                                                           "pad, so use the first nv entries, not the array's own size" if padded else ""))
     return (f"class Runtime:\n    def __init__(self, host, params):\n        self.host = host\n\n"
-            f"    def {entry}(self, system):\n        # called once per execution of the stage; the system has these ports:{ports}\n"
+            f"    def {entry}(self, system):\n        # called once per execution of the stage; the system has these ports:{ports}{notes}\n"
             f"        ...\n\n    def metrics(self):\n        return {{}}{ref}\n")
 
 
@@ -82,7 +88,7 @@ def task_brief(task: Task, world: World, gate: Gate | None, budget: Budget | Non
                       "passing, on a run whose timing is reliable" if task.goal == "speed"
                  else "the candidate must pass its checks and run"),
         funnel=[dict(tier=t, what=w) for t, w in FUNNEL],
-        answer=dict(shapes=PROPOSAL, source_skeleton=_skeleton(card)),
+        answer=dict(shapes=PROPOSAL, source_skeleton=source_skeleton(card)),
         budget=(budget or Budget()).to_dict(),
         rules=["a candidate proposed twice is answered from the memo and still counts as an attempt",
                "a source candidate has no params; an implementation candidate's params are validated against its specs",

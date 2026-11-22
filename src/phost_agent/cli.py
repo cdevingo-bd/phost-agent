@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
+import webbrowser
 from pathlib import Path
 
 from phost import ContractError
@@ -189,16 +191,54 @@ def cmd_arena(args) -> int:
             print(f"[{event['contestant']}] turn {event['turn']:<3} {event['action']:<10} {first}")
         elif event["event"] == "left":
             print(f"[{event['contestant']}] leaves: {event['why']}")
-    arena = Arena(task, _contestants(args), journal=_journal(args), allow_unsandboxed=args.allow_unsandboxed, turns=args.turns,
-                  submits=args.submits, tokens=args.tokens, open_code=not args.closed, max_tokens=args.llm_max_tokens, on_event=show)
-    report = arena.run()
-    print("\n" + arena.board_text())
-    for c in report.contestants:
-        best = f"{c['best']['speedup']:.3f}x ({c['best']['klass']})" if c["best"] else "no ranked entry"
-        print(f"{c['name']}: {best}; {c['turns']} turns, {c['submits']} timed runs, {c['tokens']} tokens, left: {c['left']}")
-    if args.out:
-        Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+    contestants = _contestants(args)                       # refuse a bad provider before opening anything
+    dash = _start_dash(args) if args.dash else None
+    arena = Arena(task, contestants, journal=_journal(args), allow_unsandboxed=args.allow_unsandboxed, turns=args.turns,
+                  submits=args.submits, tokens=args.tokens, open_code=not args.closed, feed_rows=args.feed,
+                  max_tokens=args.llm_max_tokens, on_event=show)
+    try:
+        report = arena.run()
+        print("\n" + arena.board_text())
+        for c in report.contestants:
+            best = f"{c['best']['speedup']:.3f}x ({c['best']['klass']})" if c["best"] else "no ranked entry"
+            print(f"{c['name']}: {best}; {c['turns']} turns, {c['submits']} timed runs, {c['tokens']} tokens, left: {c['left']}")
+        if args.out:
+            Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
+        if dash is not None:
+            print(f"\nThe contest is over. The dashboard stays up at {dash.url}\nCtrl-C stops it.", flush=True)
+            _hold(dash)
+    finally:
+        if dash is not None:
+            dash.shutdown_all()
     return 0
+
+
+def _start_dash(args):
+    """The dashboard, on this machine's loopback, over the state the contest writes to: its Results tab is the live board, with
+    the contestants' entries ranked as anyone's are. Needs phost-dash."""
+    try:
+        from phost_dash.app import Config
+        from phost_dash.cli import serve, serve_in_thread
+    except ImportError as error:
+        raise ContractError(f"--dash needs phost-dash installed ({error})") from None
+    from phost_score import state_dir
+    dash = serve(Config(state=state_dir(), plugins=tuple(args.plugin), scene_modules=tuple(args.scene_module),
+                        scene_dirs=tuple(args.scene_dir)), port=args.dash_port)
+    serve_in_thread(dash)
+    print(f"phost-dash is running over {state_dir()}. Open this address (it contains a one-time key; keep it to yourself):\n\n"
+          f"  {dash.url}\n", flush=True)
+    if not args.no_browser:
+        webbrowser.open(dash.url)
+    return dash
+
+
+def _hold(dash) -> None:
+    """Keep the dashboard up until the user stops it."""
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        print("\nstopping")
 
 
 def cmd_prompt(args) -> int:
@@ -280,10 +320,15 @@ def main(argv=None) -> int:
     p.add_argument("--submits", type=int, default=6, help="timed runs each contestant may use (the scarce thing)")
     p.add_argument("--tokens", type=int, default=None, help="tokens each contestant may spend (sent and received)")
     p.add_argument("--closed", action="store_true", help="the board shows scores only; contestants cannot read each other's entries")
+    p.add_argument("--feed", type=int, default=10, help="how many of the others' latest checks each turn shows (0: none; open contests only)")
     p.add_argument("--llm-option", action="append", default=[], metavar="KEY=VALUE", help="a provider option, applied to every contestant")
     p.add_argument("--llm-max-tokens", type=int, default=16000)
     p.add_argument("--llm-plugin", action="append", default=[])
     p.add_argument("--allow-unsandboxed", action="store_true")
+    p.add_argument("--dash", action="store_true", help="also run phost-dash on this machine's loopback over the same state, print its "
+                                                       "link, and keep it up after the contest ends (Ctrl-C stops it)")
+    p.add_argument("--dash-port", type=int, default=0, help="port for --dash (default: any free port)")
+    p.add_argument("--no-browser", action="store_true", help="with --dash: print the link and do not open a browser")
     p.add_argument("--out", help="write the final report as JSON")
     p.set_defaults(fn=cmd_arena)
 

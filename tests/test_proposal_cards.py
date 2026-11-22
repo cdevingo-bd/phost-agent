@@ -100,6 +100,8 @@ def test_the_source_skeleton_in_a_brief_is_valid_python_naming_the_stages_entry_
     (cls,) = [n for n in tree.body if isinstance(n, ast.ClassDef)]
     assert {n.name for n in cls.body if isinstance(n, ast.FunctionDef)} == {"__init__", "solve", "metrics"}
     assert "world" in skeleton                                          # the ports and their shapes are in it
+    assert "system.h, system.rhs, system.qacc" in skeleton              # how a runtime reaches a port, and what nv is, are stated
+    assert "nv is self.host.facts().nv" in skeleton and "hosts pad" in skeleton
 
 
 def test_a_brief_for_a_stage_whose_reference_is_the_implementations_own_asks_for_one(registry):

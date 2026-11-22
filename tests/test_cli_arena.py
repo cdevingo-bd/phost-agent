@@ -22,11 +22,11 @@ def cli(capsys, tmp_path):
 
 
 def contestant_program(tmp_path, name):
-    """A model that enters one graph on its first turn and leaves on its second."""
+    """A model that enters one graph on its first turn and reads the stage card on every turn after (it cannot leave)."""
     action = json.dumps({"action": "submit", "note": f"{name}: a dense float64 solve",
                          "graph": {"stages": {STAGE: {"source": GOOD_SOLVER, "entry": "Runtime"}}}})
     path = tmp_path / f"{name}.py"
-    path.write_text(f"import sys\ntext = sys.stdin.read()\nprint({json.dumps({'action': 'done'})!r} if '[assistant]' in text else {action!r})\n")
+    path.write_text(f"import sys\ntext = sys.stdin.read()\nprint({json.dumps({'action': 'look', 'what': 'card', 'stage': STAGE})!r} if '[assistant]' in text else {action!r})\n")
     return f"{sys.executable} {path}"
 
 
@@ -36,7 +36,7 @@ def test_two_models_enter_and_the_board_and_the_ledger_show_both(cli, tmp_path):
                          "--contestant", f"beta=cmd:{contestant_program(tmp_path, 'beta')}", "--turns", "4", "--submits", "2",
                          "--allow-unsandboxed", "--out", str(out_path))
     assert code == 0, err
-    assert "[alpha] turn 1" in out and "[beta] turn 1" in out and "[alpha] leaves: done" in out and "[beta] leaves: done" in out
+    assert "[alpha] turn 1" in out and "[beta] turn 1" in out and "[alpha] leaves: turns" in out and "[beta] leaves: turns" in out
     assert f"Board for {SCENE} at 2 worlds" in out
     report = json.loads(out_path.read_text())
     assert {c["name"] for c in report["contestants"]} == {"alpha", "beta"} and all(c["submits"] == 1 for c in report["contestants"])
@@ -50,3 +50,27 @@ def test_a_contestant_name_defaults_to_its_provider_and_a_bad_provider_is_refuse
     assert code == 1 and "no LLM provider 'nope'" in err
     code, _, err = cli("arena", *BASE, "--contestant", "openai:some-model")
     assert code == 1 and "OPENAI_API_KEY" in err
+
+
+def test_dash_serves_the_same_state_so_the_contestants_are_on_its_board_and_its_link_is_printed(cli, tmp_path, monkeypatch):
+    """`arena --dash` is one command: the link comes up before the first turn, and what the contest ranks is what the dashboard shows."""
+    pytest.importorskip("phost_dash")
+    import urllib.request
+    from phost_agent import cli as cli_module
+    seen = {}
+
+    def hold(dash):                                        # the contest is over; ask the dashboard over HTTP before it goes down
+        board = urllib.request.Request(f"http://127.0.0.1:{dash.server_address[1]}/api/board?scene={SCENE}",
+                                       headers={"X-Phost-Token": dash.guard.token})
+        with urllib.request.urlopen(board, timeout=10) as reply:
+            seen["status"], body = reply.status, json.loads(reply.read())
+        seen["rows"] = [(r["label"], r["trust"]) for g in body["groups"] for r in g["rows"]]
+        seen["url"] = dash.url
+    monkeypatch.setattr(cli_module, "_hold", hold)
+    code, out, err = cli("arena", *BASE, "--contestant", f"alpha=cmd:{contestant_program(tmp_path, 'alpha')}",
+                         "--contestant", f"beta=cmd:{contestant_program(tmp_path, 'beta')}", "--turns", "3", "--submits", "2",
+                         "--allow-unsandboxed", "--dash", "--no-browser")
+    assert code == 0, err
+    assert out.index("phost-dash is running") < out.index("[alpha] turn 1") and seen["url"] in out
+    assert seen["status"] == 200 and set(seen["rows"]) == {("alpha", "self-reported"), ("beta", "self-reported")}
+    assert "The contest is over. The dashboard stays up" in out

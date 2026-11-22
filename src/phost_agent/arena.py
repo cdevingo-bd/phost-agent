@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
@@ -24,7 +25,7 @@ from phost_lab.graph import GraphSpec, Node
 from phost_score import SELF_REPORTED, Entry, Ledger, default_ledger, leaderboard, make_entries
 
 from .arena_text import facts_text, parse_action, render_board, system_prompt
-from .cards import render_card, stage_card
+from .cards import render_card, source_skeleton, stage_card
 from .ceiling import check_ceiling
 from .checker import run_check
 from .funnel import Funnel, run_timed
@@ -77,7 +78,7 @@ class Contestant:
     submits: int = 0
     tokens: int = 0
     device_seconds: float = 0.0
-    left: str = ""                           # why it is no longer playing: done | turns | submits | tokens | failed: ...
+    left: str = ""                           # why it is no longer playing: turns | submits | tokens | failed: ...
     pending: str = ""                        # what it is told next
     seen: int = -1                           # the journal position of the board it last saw
     best: dict[str, Any] | None = None       # its fastest ranked entry
@@ -104,7 +105,7 @@ class Arena:
                  ledger: Ledger | None = None, lease: Lease | None = None, registry: phost.Registry | None = None,
                  measure=None, check: Callable = run_check, timed: Callable = run_timed, allow_unsandboxed: bool = False,
                  candidates_dir=None, turns: int = 30, submits: int = 6, tokens: int | None = None, open_code: bool = True,
-                 board_rows: int = 8, max_tokens: int = 16000, keep_turns: int = 40,
+                 board_rows: int = 8, feed_rows: int = 10, max_tokens: int = 16000, keep_turns: int = 40,
                  on_event: Callable[[Mapping[str, Any]], None] | None = None):
         names = [c.name for c in contestants]
         if len(contestants) < 1 or len(set(names)) != len(names):
@@ -123,6 +124,7 @@ class Arena:
         self.allow_unsandboxed, self.candidates_dir = allow_unsandboxed, candidates_dir
         self.turns, self.submits, self.tokens, self.open_code = turns, submits, tokens, open_code
         self.board_rows, self.max_tokens, self.keep_turns = board_rows, max_tokens, keep_turns
+        self.feed_rows = feed_rows if open_code else 0              # a closed contest shows no one's work
         self.emit = on_event or (lambda event: None)
         self.worlds = max(task.worlds)
         self._funnels: dict[str, Funnel] = {}
@@ -151,7 +153,75 @@ class Arena:
             s in c.get("stages", {}) and c["stages"][s].get("applies") for c in report.get("cells", ()))] or self.stages
         self.stage_names = listed
         self.system = redact(system_prompt(registry=self.registry, stages=listed, facts=self.facts, scene=self.task.scene,
-                                           worlds=self.task.worlds, turns=self.turns, submits=self.submits, open_code=self.open_code))
+                                           worlds=self.task.worlds, turns=self.turns, submits=self.submits, open_code=self.open_code,
+                                           feed=self.feed_rows > 0))
+
+    # ---- the feed: every check anyone ran, for the others to read ---------------------------------------
+
+    def attempts(self) -> list[dict[str, Any]]:
+        """Every check recorded for this scene, oldest first, including those of an earlier contest in the same journal."""
+        return [r for r in self.journal.records("arena") if r.get("phase") == "attempt" and r.get("scene") == self.task.scene]
+
+    @staticmethod
+    def _what(record: Mapping[str, Any]) -> str:
+        parts = []
+        for stage, spec in record["graph"]["stages"].items():
+            source = spec.get("source")
+            parts.append(f"{stage} (source, {len(source.splitlines())} lines)" if source else f"{stage} ({spec.get('impl')})")
+        return ", ".join(parts)
+
+    @staticmethod
+    def _outcome(record: Mapping[str, Any], limit: int | None = 150) -> str:
+        if record["ok"]:
+            return "passed the checks"
+        first = record["reasons"][0]
+        reason = " ".join(str(first["reason"]).split())
+        return f"FAILED at the {first['tier']} tier: " + (reason if limit is None or len(reason) <= limit else reason[:limit] + "...")
+
+    def feed_text(self, you: str | None = None) -> str:
+        """The others' latest checks, one line each. What you ran yourself is already in your own conversation."""
+        if self.feed_rows < 1:
+            return ""
+        others = [r for r in self.attempts() if r["contestant"] != you][-self.feed_rows:]
+        if not others:
+            return ""
+        lines = [f"- {r['id']} {r['contestant']} turn {r['turn']}: {self._what(r)}: {self._outcome(r)}" for r in others]
+        return ("Recent checks by the others, newest last (look at an attempt by its id for the source and the whole reason):\n"
+                + "\n".join(lines))
+
+    def _post(self, c: Contestant, action: str, graph: Mapping[str, Proposal], prepared, ok: bool) -> str:
+        """Record a check for the feed. Returns a line saying so if this exact graph was checked before (by anyone you may read)."""
+        digest = self._digest(prepared)
+        earlier = [r for r in self.attempts() if r.get("digest") == digest and (self.open_code or r["contestant"] == c.name)]
+        reasons = [dict(stage=s, tier=p.rejection[0], reason=str(p.rejection[1])[:1200]) for s, p in prepared.items() if p.rejection]
+        attempt_id = hashlib.sha256(f"{self.task.scene}|{c.name}|{c.turns}|{time.time()}".encode()).hexdigest()[:8]
+        self.journal.append("arena", phase="attempt", id=attempt_id, contestant=c.name, turn=c.turns, scene=self.task.scene,
+                            action=action, ok=ok, digest=digest, graph=dict(stages=self._spec(graph)), reasons=reasons)
+        if not earlier:
+            return ""
+        before = earlier[-1]
+        who = "you" if before["contestant"] == c.name else before["contestant"]
+        return f"\nThis exact graph was already checked by {who} on turn {before['turn']} (attempt {before['id']}): {self._outcome(before)}."
+
+    @staticmethod
+    def _digest(prepared) -> str:
+        return hashlib.sha256(repr(sorted((s, p.key) for s, p in prepared.items())).encode()).hexdigest()
+
+    @staticmethod
+    def _spec(graph: Mapping[str, Proposal]) -> dict[str, Any]:
+        return {s: ({"source": p.source, "entry": p.entry, "impl": p.impl_id} if p.source else {"impl": p.impl, "params": dict(p.params)})
+                for s, p in graph.items()}
+
+    def _attempt_text(self, record: Mapping[str, Any]) -> str:
+        parts = [f"Attempt {record['id']} by {record['contestant']} on turn {record['turn']} ({record['action']}): "
+                 + self._outcome(record, limit=None)]
+        for stage, spec in record["graph"]["stages"].items():
+            if spec.get("source"):
+                parts.append(f"{stage}: source\n```python\n{spec['source'].rstrip()}\n```")
+            else:
+                parts.append(f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip())
+        parts += [f"- {r['stage']}: rejected at the {r['tier']} tier: {r['reason']}" for r in record["reasons"]]
+        return "\n".join(parts)
 
     # ---- the board --------------------------------------------------------------------------------------
 
@@ -202,7 +272,8 @@ class Arena:
         head = self.ledger.head.seq                     # the board is read now, so a rival's entry since your last move is on it
         board = self.board_text(c.name) if head != c.seen else "(the board has not changed)"
         c.seen = head
-        window = (c.messages + [{"role": "user", "content": c.pending + "\n\n" + board}])[-(2 * self.keep_turns + 1):]
+        feed = self.feed_text(c.name)
+        window = (c.messages + [{"role": "user", "content": c.pending + "\n\n" + board + ("\n\n" + feed if feed else "")}])[-(2 * self.keep_turns + 1):]
         window = [dict(role=m["role"], content=redact(m["content"])) for m in window]      # everything sent, every time
         try:
             reply = c.client.complete(self.system, window, max_tokens=self.max_tokens)
@@ -236,9 +307,6 @@ class Arena:
             return "(unreadable)", f"That reply could not be read: {error}. Reply with one JSON object."
         kind = action.get("action")
         try:
-            if kind == "done":
-                self._leave(c, "done")
-                return "done", "You have left the contest."
             if kind == "look":
                 return "look", self._look(c, action)
             if kind in ("check", "submit"):
@@ -246,7 +314,7 @@ class Arena:
                 return str(kind), self._check(c, graph) if kind == "check" else self._submit(c, graph, str(action.get("note", "")))
         except ContractError as error:
             return str(kind), f"Not accepted: {error}"
-        return str(kind), f'Unknown action {kind!r}; the actions are look, check, submit and done.'
+        return str(kind), f'Unknown action {kind!r}; the actions are look, check and submit.'
 
     def _look(self, c: Contestant, action: Mapping[str, Any]) -> str:
         what = action.get("what")
@@ -254,7 +322,9 @@ class Arena:
             stage = str(action.get("stage", ""))
             if stage not in self.stages:
                 raise ContractError(f"no stage {stage!r}; the stages are {', '.join(self.stages)}")
-            return render_card(stage_card(self.registry, stage))
+            card = stage_card(self.registry, stage)
+            return (render_card(card) + "\n\n## the source of a candidate for this stage, as a skeleton\n\n```python\n"
+                    + source_skeleton(card).rstrip() + "\n```")
         if what == "entry":
             if not self.open_code:
                 raise ContractError("this contest is closed: entries show what they scored, not what they submitted")
@@ -273,7 +343,15 @@ class Arena:
             if recorded is None:
                 raise ContractError(f"no entry {wanted!r} is on this board")
             return recorded
-        raise ContractError('look takes "what": "card" (with a stage) or "entry" (with an id)')
+        if what == "attempt":
+            if not self.open_code:
+                raise ContractError("this contest is closed: nobody sees what another contestant checked")
+            wanted = str(action.get("id", ""))
+            for record in reversed(self.attempts()):
+                if record["id"] == wanted:
+                    return self._attempt_text(record)
+            raise ContractError(f"no attempt {wanted!r} is recorded for this scene")
+        raise ContractError('look takes "what": "card" (with a stage), "entry" or "attempt" (with an id)')
 
     def _recorded_entry(self, wanted: str) -> str | None:
         """An entry on the board that did not come from this contest (a person's, or an earlier run's), described from the
@@ -332,8 +410,11 @@ class Arena:
         return lines, ok
 
     def _check(self, c: Contestant, graph: Mapping[str, Proposal]) -> str:
-        lines, ok = self._check_lines(self._prepare_all(graph))
-        return ("The contract checks pass for every stage. Nothing was timed." if ok else "The checks failed; nothing was timed.") + "\n" + "\n".join(lines)
+        prepared = self._prepare_all(graph)
+        lines, ok = self._check_lines(prepared)
+        again = self._post(c, "check", graph, prepared, ok)
+        return (("The contract checks pass for every stage. Nothing was timed." if ok else "The checks failed; nothing was timed.")
+                + "\n" + "\n".join(lines) + again)
 
     def _submit(self, c: Contestant, graph: Mapping[str, Proposal], note: str) -> str:
         if c.submits >= self.submits:
@@ -341,9 +422,10 @@ class Arena:
         prepared = self._prepare_all(graph)
         lines, ok = self._check_lines(prepared)
         if not ok:
-            return "Not timed: the checks failed (no timed run was used).\n" + "\n".join(lines)
+            again = self._post(c, "submit", graph, prepared, ok)
+            return "Not timed: the checks failed (no timed run was used).\n" + "\n".join(lines) + again
         candidates = [p.candidate for p in prepared.values() if p.candidate]
-        digest = hashlib.sha256(repr(sorted((s, p.key) for s, p in prepared.items())).encode()).hexdigest()
+        digest = self._digest(prepared)
         spec = GraphSpec(name=f"{c.name}-{digest[:8]}", host=self.world.graph_host,
                          stages={s: Node(p.proposal.impl_id, dict(p.params)) for s, p in prepared.items()},
                          plugins=tuple(x.module for x in candidates), note=f"entered by {c.name}")
@@ -393,7 +475,5 @@ class Arena:
         return "\n".join(lines) or "- the run produced no results"
 
     def _record(self, c: Contestant, graph, prepared, ids, summary, note) -> None:
-        spec = {s: ({"source": p.source, "entry": p.entry, "impl": p.impl_id} if p.source else {"impl": p.impl, "params": dict(p.params)})
-                for s, p in graph.items()}
-        self.journal.append("submission", contestant=c.name, graph=dict(stages=spec), entry_ids=ids, note=note[:400],
+        self.journal.append("submission", contestant=c.name, graph=dict(stages=self._spec(graph)), entry_ids=ids, note=note[:400],
                             speedup=(summary or {}).get("speedup"), klass=(summary or {}).get("klass", ""))
