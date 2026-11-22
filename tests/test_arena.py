@@ -11,7 +11,8 @@ from phost_agent.arena import Arena, ArenaTask, Contestant
 from phost_agent.arena_text import parse_action
 from phost_agent.llm import LLMError, LLMFatal, Reply
 from phost_lab.bootstrap import load_registry
-from phost_score import Ledger
+from phost_lab.graph import GraphSpec, Node
+from phost_score import SELF_REPORTED, Ledger, make_entries
 from conftest import GOOD_SOLVER, SCENE, STAGE, make_result, passing
 
 FAST = f"{STAGE}/fast"
@@ -132,6 +133,24 @@ def test_a_rival_can_read_an_entry_it_wants_to_build_on_unless_the_contest_is_cl
     assert "this contest is closed" in closed.calls[1]["messages"][-1]["content"]
     card = a.by_name["beta"]
     assert any("# stage effective.solve" in str(m["content"]) for m in card.messages + [{"content": card.pending}])
+
+
+def test_an_entry_on_the_board_from_outside_the_contest_can_be_looked_at_too(tmp_path, registry):
+    """The board is the ledger, so a person's entry or an earlier run's is ranked beside the contestants. Showing its id and
+    then refusing to open it ("not submitted in this contest") was a hole: it opens from what the ledger kept."""
+    outside = GraphSpec(name="theirs", host="chain", note="a person's entry",
+                        stages={STAGE: Node(FAST, {"gain": 7.0})})
+    [entry] = make_entries(make_result(outside, speedup=3.5, worlds=(2,)), label="someone-else", trust=SELF_REPORTED)
+    Ledger(tmp_path / "ledger.jsonl").append(entry.to_dict())
+    looker = Model(act(action="look", what="entry", id=entry.id), act(action="look", what="entry", id="0123456789abcdef"),
+                   act(action="done"))
+    a = arena(tmp_path, registry, ("gamma", looker))
+    a.run()
+    assert entry.id in a.board_text("gamma") and "someone-else" in a.board_text("gamma")
+    seen = looker.calls[1]["messages"][-1]["content"]
+    assert f"Entry {entry.id} by someone-else, recorded outside this contest (self-reported)" in seen
+    assert "3.5x" in seen and "a person's entry" in seen and f"{STAGE}: {FAST} {{'gain': 7.0}}" in seen
+    assert "no entry '0123456789abcdef' is on this board" in looker.calls[2]["messages"][-1]["content"]
 
 
 def test_an_entry_may_replace_several_stages_and_bring_its_own_source(tmp_path, registry):

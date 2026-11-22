@@ -21,7 +21,7 @@ import phost
 from phost import ContractError
 from phost_lab.bootstrap import load_registry
 from phost_lab.graph import GraphSpec, Node
-from phost_score import SELF_REPORTED, Ledger, default_ledger, leaderboard, make_entries
+from phost_score import SELF_REPORTED, Entry, Ledger, default_ledger, leaderboard, make_entries
 
 from .arena_text import facts_text, parse_action, render_board, system_prompt
 from .cards import render_card, stage_card
@@ -269,8 +269,29 @@ class Arena:
                         else:
                             parts.append(f"{stage}: {spec['impl']} {spec.get('params') or ''}".rstrip())
                     return "\n".join(parts)
-            raise ContractError(f"no entry {wanted!r} was submitted in this contest")
+            recorded = self._recorded_entry(wanted)
+            if recorded is None:
+                raise ContractError(f"no entry {wanted!r} is on this board")
+            return recorded
         raise ContractError('look takes "what": "card" (with a stage) or "entry" (with an id)')
+
+    def _recorded_entry(self, wanted: str) -> str | None:
+        """An entry on the board that did not come from this contest (a person's, or an earlier run's), described from the
+        ledger: its stages and parameters, and which stages had source (the source itself is not kept with a ledger entry)."""
+        for record in reversed(self.ledger.records(strict=False)):
+            entry = Entry.from_dict(record.entry)
+            if entry.id != wanted:
+                continue
+            graph = record.entry.get("graph") or {}
+            speed = entry.objectives.get("speedup")
+            parts = [f"Entry {wanted} by {entry.label or '(no label)'}, recorded outside this contest ({entry.trust}): "
+                     + (f"{speed:.3g}x" if speed is not None else "no speedup figure") + f" ({entry.klass}). "
+                     f"Their note: {graph.get('note') or '(none)'}"]
+            parts += [f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip() for stage, spec in (graph.get("stages") or {}).items()]
+            if entry.artifacts:
+                parts.append("It also submitted source for " + ", ".join(sorted(entry.artifacts)) + ", which the ledger does not keep.")
+            return "\n".join(parts)
+        return None
 
     def _graph(self, graph: Any, blocks: list[tuple[str, str]]) -> dict[str, Proposal]:
         if not isinstance(graph, Mapping) or not isinstance(graph.get("stages"), Mapping) or not graph["stages"]:

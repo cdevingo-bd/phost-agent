@@ -96,7 +96,8 @@ a turn and nothing else. Entries go to the same ledger as everything else in `ph
 give); what every stage is and which implementations exist; the rules of judging; the actions; its budget; the board. **What it is not
 told:** what to try, in what order, or how to search. There is no coaching in the prompt (`tests/test_arena.py` checks that).
 
-**What it can do:** `look` at a stage's card or at a rival's entry (graph, parameters, source: the contest is open unless `--closed`);
+**What it can do:** `look` at a stage's card or at any entry on the board (a rival's: graph, parameters, source, while the contest is open, unless `--closed`;
+one recorded outside the contest, such as a person's or an earlier run's: graph and parameters, since the ledger does not keep source);
 `check` a graph (the contract checks only); `submit` one (check, time, rank, and be told where it landed); `done`. A graph replaces any
 set of stages, each with a registered implementation and parameters or with the source of a runtime class. A second model that builds
 on the first's entry is a legitimate move, and is why the contest is open by default.
