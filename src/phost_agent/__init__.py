@@ -15,7 +15,7 @@ from .memo import Memo, key_for
 from .outcome import ACCEPTED, MEASURED, REJECTED, Outcome
 from .proposal import Candidate, Proposal, write_candidate
 from .proposers import CommandProposer, CoordinateProposer, Proposer, ProposerError, ProposerFatal, ScriptedProposer
-from .status import overview, render_status, summarize
+from .status import arena_overview, overview, render_status, summarize
 from .task import Task, World, resolve
 
 __version__ = "0.1.0.dev0"
@@ -23,4 +23,4 @@ __all__ = ["Arena", "ArenaReport", "ArenaTask", "Contestant", "Budget", "Spend",
            "gate_from_report", "recorded_gate", "CheckResult", "run_check", "Funnel", "Prepared", "Journal", "Lease",
            "LeaseTimeout", "Report", "run_loop", "Memo", "key_for", "Outcome", "ACCEPTED", "MEASURED", "REJECTED", "Proposal",
            "Candidate", "write_candidate", "Proposer", "ProposerError", "ProposerFatal", "ScriptedProposer", "CoordinateProposer",
-           "CommandProposer", "summarize", "overview", "render_status", "Task", "World", "resolve"]
+           "CommandProposer", "summarize", "overview", "arena_overview", "render_status", "Task", "World", "resolve"]

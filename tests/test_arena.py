@@ -229,6 +229,38 @@ def test_a_closed_contest_posts_nothing_and_refuses_to_show_an_attempt(tmp_path,
     assert "every check anyone runs" not in b.system
 
 
+def test_the_dashboard_summary_of_a_contest_names_who_is_in_it_what_they_checked_and_what_they_entered(tmp_path, registry):
+    from phost_agent import arena_overview
+    assert arena_overview(Journal(tmp_path / "empty.jsonl")) is None
+    alpha = Model(act(action="check", graph=FAILING), act(action="submit", graph=PASSING, note="a plain gain"))
+    beta = Model(act(action="check", graph=PASSING))
+    a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), check=failing_check, turns=3)
+    a.run()
+    ov = arena_overview(a.journal)
+    assert ov["status"] == "finished" and ov["scene"] == SCENE and ov["earlier_contests"] == 0 and ov["budget"]["turns"] == 3
+    by = {c["name"]: c for c in ov["contestants"]}
+    assert [c["name"] for c in ov["contestants"]] == ["alpha", "beta"] and by["alpha"]["turns"] == 3 and by["alpha"]["left"] == "turns"
+    assert (by["alpha"]["checks"], by["alpha"]["passed"], by["alpha"]["entries"], by["alpha"]["best_speedup"]) == (1, 0, 1, 1.0)
+    assert (by["beta"]["checks"], by["beta"]["passed"], by["beta"]["entries"], by["beta"]["best_speedup"]) == (1, 1, 0, None)
+    assert [c["contestant"] for c in ov["checks"]] == ["beta", "alpha"]                         # newest first
+    assert ov["checks"][0]["ok"] and "residual too big" in ov["checks"][1]["outcome"] and f"{STAGE} ({FAST})" in ov["checks"][1]["what"]
+    [entry] = ov["entries"]
+    assert entry["contestant"] == "alpha" and entry["speedup"] == 1.0 and entry["klass"] == "exact" and entry["note"] == "a plain gain"
+    assert "dof.passive_force" in entry["what"]
+    arena(tmp_path, registry, ("gamma", Model()), turns=1).run()                                # a later contest replaces it
+    later = arena_overview(a.journal)
+    assert [c["name"] for c in later["contestants"]] == ["gamma"] and later["earlier_contests"] == 1 and later["checks"] == []
+
+
+def test_a_contest_with_no_end_record_is_shown_as_running_with_its_last_activity(tmp_path):
+    from phost_agent import arena_overview
+    journal = Journal(tmp_path / "journal.jsonl")
+    journal.append("arena", phase="start", task=dict(scene="s", worlds=[1]), contestants=[dict(name="x", model="m:1")], budget=dict(turns=9))
+    journal.append("arena", phase="turn", contestant="x", turn=1, action="look", tokens=40)
+    ov = arena_overview(journal)
+    assert ov["status"] == "running" and ov["ended"] is None and ov["last_activity"] and ov["contestants"][0]["last_action"] == "look"
+
+
 # ---- the rules the arena keeps ---------------------------------------------------------------------------------------------------
 
 def test_an_entry_that_fails_its_checks_is_not_timed_and_costs_no_timed_run(tmp_path, registry):

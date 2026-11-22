@@ -156,3 +156,21 @@ def parse_action(text: str) -> tuple[dict[str, Any], list[tuple[str, str]]]:
             return obj, blocks
         i = body.find("{", i + 1)
     raise ValueError('no JSON object with an "action" was found')
+
+
+def what_text(record: Mapping[str, Any]) -> str:
+    """The stages an attempt or entry replaced, each with its implementation or the size of its source."""
+    parts = []
+    for stage, spec in record["graph"]["stages"].items():
+        source = spec.get("source")
+        parts.append(f"{stage} (source, {len(source.splitlines())} lines)" if source else f"{stage} ({spec.get('impl')})")
+    return ", ".join(parts)
+
+
+def outcome_text(record: Mapping[str, Any], limit: int | None = 150) -> str:
+    """Whether a check passed, or the first stage's reason it did not (cut to ``limit`` characters; None for all of it)."""
+    if record["ok"]:
+        return "passed the checks"
+    first = record["reasons"][0]
+    reason = " ".join(str(first["reason"]).split())
+    return f"FAILED at the {first['tier']} tier: " + (reason if limit is None or len(reason) <= limit else reason[:limit] + "...")

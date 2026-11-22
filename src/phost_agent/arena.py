@@ -24,7 +24,7 @@ from phost_lab.bootstrap import load_registry
 from phost_lab.graph import GraphSpec, Node
 from phost_score import SELF_REPORTED, Entry, Ledger, default_ledger, leaderboard, make_entries
 
-from .arena_text import facts_text, parse_action, render_board, system_prompt
+from .arena_text import facts_text, outcome_text, parse_action, render_board, system_prompt, what_text
 from .cards import render_card, source_skeleton, stage_card
 from .ceiling import check_ceiling
 from .checker import run_check
@@ -162,21 +162,8 @@ class Arena:
         """Every check recorded for this scene, oldest first, including those of an earlier contest in the same journal."""
         return [r for r in self.journal.records("arena") if r.get("phase") == "attempt" and r.get("scene") == self.task.scene]
 
-    @staticmethod
-    def _what(record: Mapping[str, Any]) -> str:
-        parts = []
-        for stage, spec in record["graph"]["stages"].items():
-            source = spec.get("source")
-            parts.append(f"{stage} (source, {len(source.splitlines())} lines)" if source else f"{stage} ({spec.get('impl')})")
-        return ", ".join(parts)
-
-    @staticmethod
-    def _outcome(record: Mapping[str, Any], limit: int | None = 150) -> str:
-        if record["ok"]:
-            return "passed the checks"
-        first = record["reasons"][0]
-        reason = " ".join(str(first["reason"]).split())
-        return f"FAILED at the {first['tier']} tier: " + (reason if limit is None or len(reason) <= limit else reason[:limit] + "...")
+    _what = staticmethod(what_text)
+    _outcome = staticmethod(outcome_text)
 
     def feed_text(self, you: str | None = None) -> str:
         """The others' latest checks, one line each. What you ran yourself is already in your own conversation."""

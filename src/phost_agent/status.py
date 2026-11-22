@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from typing import Any
 
+from .arena_text import outcome_text, what_text
 from .journal import Journal
 from .lease import Lease
 
@@ -100,3 +101,40 @@ def overview(journal: Journal, *, lease_dir=None, devices: tuple[str, ...] = ("c
     out["leases"] = {device: Lease(device, lease_dir).holder() for device in devices}
     out["problems"] = out["problems"][:5]
     return out
+
+
+def arena_overview(journal: Journal, *, checks: int = 30, entries: int = 15) -> dict[str, Any] | None:
+    """The latest contest in the journal (``phost-agent arena``): who is in it, what each has done so far, every check posted and
+    every entry submitted, newest first. None when no contest has been started. A contest with no ``end`` record is shown as
+    running: a process that was stopped leaves the same trace, so ``last_activity`` is what says how long it has been quiet."""
+    records = [r.entry for r in journal.ledger.records(strict=False)]
+    starts = [i for i, e in enumerate(records) if e["kind"] == "arena" and e.get("phase") == "start"]
+    if not starts:
+        return None
+    mine = records[starts[-1]:]
+    start = mine[0]
+    end = next((e for e in mine if e["kind"] == "arena" and e.get("phase") == "end"), None)
+    turns = [e for e in mine if e["kind"] == "arena" and e.get("phase") == "turn"]
+    posted = [e for e in mine if e["kind"] == "arena" and e.get("phase") == "attempt"]
+    entered = [e for e in mine if e["kind"] == "submission"]
+    left = {c["name"]: c.get("left", "") for c in (end or {}).get("contestants", ())}
+    players = []
+    for c in start["contestants"]:
+        own_turns = [t for t in turns if t["contestant"] == c["name"]]
+        own_checks = [a for a in posted if a["contestant"] == c["name"]]
+        own_entries = [e for e in entered if e["contestant"] == c["name"]]
+        speeds = [e["speedup"] for e in own_entries if e.get("speedup") is not None]
+        players.append(dict(name=c["name"], model=c.get("model", ""), turns=len(own_turns), tokens=sum(t.get("tokens", 0) for t in own_turns),
+                            last_action=own_turns[-1]["action"] if own_turns else "", last_time=own_turns[-1]["time"] if own_turns else None,
+                            checks=len(own_checks), passed=sum(1 for a in own_checks if a["ok"]), entries=len(own_entries),
+                            best_speedup=max(speeds, default=None),
+                            left=left.get(c["name"]) if left.get(c["name"]) not in (None, "still playing") else ""))
+    times = [e["time"] for e in mine if e.get("time")]
+    return dict(
+        scene=start["task"]["scene"], worlds=start["task"].get("worlds"), started=start.get("time"), ended=end.get("time") if end else None,
+        status="finished" if end else "running", last_activity=max(times, default=None), budget=start.get("budget", {}),
+        contestants=players, earlier_contests=len(starts) - 1,
+        checks=[dict(id=a["id"], contestant=a["contestant"], turn=a["turn"], action=a["action"], ok=a["ok"], time=a.get("time"),
+                     what=what_text(a), outcome=outcome_text(a, limit=300)) for a in reversed(posted[-checks:])],
+        entries=[dict(contestant=e["contestant"], speedup=e.get("speedup"), klass=e.get("klass", ""), note=(e.get("note") or "")[:240],
+                      what=what_text(e), time=e.get("time")) for e in reversed(entered[-entries:])])
