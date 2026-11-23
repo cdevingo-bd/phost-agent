@@ -41,6 +41,8 @@ Reply with one JSON object per turn:
   {"action": "look", "what": "card", "stage": "<stage>"}       the stage's full card (pinned at the top)
   {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: stages, parameters, source
   {"action": "look", "what": "attempt", "id": "<attempt id>"}  a check anyone ran: its source and the whole reason it failed (open contests)
+      add "view": "outline" to either for the structure of its source (size, imports, classes and functions, comments) instead of all of it
+  {"action": "look", "what": "diff", "a": "<id>", "b": "<id>"}  what changed in the source from one attempt or entry to another
   {"action": "look", "what": "board"}                          the whole board now
   {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note goes in your notebook
   {"action": "submit", "graph": GRAPH, "note": "<why>"}        check, time and rank it: uses one of your timed runs

@@ -137,4 +137,4 @@ def arena_overview(journal: Journal, *, checks: int = 30, entries: int = 15) -> 
         checks=[dict(id=a["id"], contestant=a["contestant"], turn=a["turn"], action=a["action"], ok=a["ok"], time=a.get("time"),
                      what=what_text(a), outcome=outcome_text(a, limit=300)) for a in reversed(posted[-checks:])],
         entries=[dict(contestant=e["contestant"], speedup=e.get("speedup"), klass=e.get("klass", ""), note=(e.get("note") or "")[:240],
-                      what=what_text(e), time=e.get("time")) for e in reversed(entered[-entries:])])
+                      what=what_text(e), time=e.get("time"), entry_ids=list(e.get("entry_ids") or [])) for e in reversed(entered[-entries:])])

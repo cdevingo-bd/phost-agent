@@ -561,6 +561,40 @@ def test_older_turns_in_the_window_name_the_id_their_code_is_kept_under_and_that
     assert sent[3] < [t["sent"]["chars"] for t in whole.journal.records("arena") if t.get("phase") == "turn"][3]
 
 
+def test_an_outline_and_a_diff_are_cheaper_ways_to_read_and_the_whole_source_is_still_there(tmp_path, registry):
+    graph = {"stages": {STAGE: {"entry": "Runtime"}}}
+    alpha = Dyn(act(action="check", graph=graph, note="dense", _blocks=SOURCE_REQUEST),
+                act(action="check", graph=graph, _blocks=SOURCE_REQUEST.replace("float64 dense solve", "float32 dense solve")))
+    a = arena(tmp_path, registry, ("alpha", alpha), allow_unsandboxed=True, turns=2)
+    a.run()
+    first, second = a.attempts()
+    reader = Dyn(act(action="look", what="attempt", id=first["id"], view="outline"), act(action="look", what="attempt", id=first["id"]),
+                 act(action="look", what="diff", a=first["id"], b=second["id"]), act(action="look", what="attempt", id=first["id"], view="bogus"),
+                 act(action="look", what="diff", a=first["id"], b="deadbeef"))
+    b = arena(tmp_path, registry, ("beta", reader), allow_unsandboxed=True, turns=6)
+    b.run()
+    results = [call["messages"][-1]["content"] for call in reader.calls[1:]]
+    outlined, whole, diffed, bad, missing = results[:5]
+    assert "source outline" in outlined and "class Runtime" in outlined and "```python" not in outlined and "np.linalg.solve" not in outlined
+    assert "```python" in whole and "np.linalg.solve" in whole and len(outlined) < 0.6 * len(whole)
+    assert f"what changed from {first['id']} to {second['id']}" in diffed and "-" in diffed and "float32 dense solve" in diffed
+    assert "float64 dense solve" in diffed and "np.linalg.solve" not in diffed                    # only the changed line and its neighbours
+    assert '"view" is "source"' in bad and "no attempt or entry 'deadbeef'" in missing
+    notebook_reads = [label for _, label in b.by_name["beta"].reads]
+    assert f"attempt {first['id']} (outline)" in notebook_reads and f"diff {first['id']} {second['id']}" in notebook_reads
+
+
+def test_a_closed_contest_lets_nobody_outline_or_diff_what_another_contestant_wrote(tmp_path, registry):
+    graph = {"stages": {STAGE: {"entry": "Runtime"}}}
+    a = arena(tmp_path, registry, ("alpha", Dyn(act(action="check", graph=graph, _blocks=SOURCE_REQUEST))), allow_unsandboxed=True, turns=1, open_code=False)
+    a.run()
+    (first,) = a.attempts()
+    spy = Dyn(act(action="look", what="diff", a=first["id"], b=first["id"]), act(action="look", what="attempt", id=first["id"], view="outline"))
+    b = arena(tmp_path, registry, ("beta", spy), allow_unsandboxed=True, turns=2, open_code=False)
+    b.run()
+    assert all("this contest is closed" in call["messages"][-1]["content"] for call in spy.calls[1:])
+
+
 def test_an_edit_that_does_not_apply_costs_a_turn_and_says_where_to_look(tmp_path, registry):
     model = Dyn(act(action="check", graph={"stages": {STAGE: {"entry": "Runtime"}}}, _blocks=SOURCE_REQUEST),
                 lambda m: act(action="check", graph={"stages": {STAGE: {"base": attempt_id(m)}}}, _blocks=edit_block("def solve(self, q):", "x")),

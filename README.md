@@ -140,6 +140,14 @@ or anyone's while the contest is open), run as it was or edited by an `edit` blo
 must match one place, and a refusal says where the nearest text is). A fork of a rival's entry costs the edit, not the reading and the
 retyping. The result of a check names its attempt id and the result of a timed run its entry ids.
 
+**Cheaper ways to read (`reading.py`).** The measured cost of a contest was mostly full-source `look`s at other entries (about 8k
+characters each, sent again for a turn or two). `look` on an entry or an attempt takes `"view": "outline"`: the size of the source, what
+it imports, its classes and functions with the first line of each docstring, and its first comments, about a tenth of the whole.
+`{"action": "look", "what": "diff", "a": <id>, "b": <id>}` gives what changed in the source from one attempt or entry to another (a
+unified diff with two lines of context, cut at 3 000 characters). Both are views of the same record, offered beside the whole source,
+which is still the default, and a contest that is closed still shows only a contestant's own work. The journal records what was read
+(`entry <id> (outline)`, `diff <a> <b>`) so the notebook says so.
+
 **Several actions in a turn.** `{"actions": [...]}` holds up to 6 look, check and submit actions, run in order, each answered under its
 own header; a failing one does not stop the others. A turn is one call to the model and counts once against the turns however many
 actions it holds, so checking three variants costs one prompt, not three. With several actions a stage's python and edit blocks are used

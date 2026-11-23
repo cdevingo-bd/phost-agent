@@ -29,6 +29,7 @@ from .arena_text import (MAX_ACTIONS, facts_text, outcome_text, parse_actions, r
 from .cards import render_card, source_skeleton, stage_card
 from .ceiling import check_ceiling
 from .checker import run_check
+from .reading import outline, source_diff
 from .context import WHOLE_TURNS, Exchange, assemble, condense, notebook_text, pinned_text, trim
 from .edits import apply_hunks, line_changes, parse_hunks
 from .facts import facts_block, facts_identity, probe_source
@@ -279,14 +280,10 @@ class Arena:
                 out[s].update(base=fork["base"], edit=fork["edit"])
         return out
 
-    def _attempt_text(self, record: Mapping[str, Any]) -> str:
+    def _attempt_text(self, record: Mapping[str, Any], view: str = "source") -> str:
         parts = [f"Attempt {record['id']} by {record['contestant']} on turn {record['turn']} ({record['action']}): "
                  + self._outcome(record, limit=None)]
-        for stage, spec in record["graph"]["stages"].items():
-            if spec.get("source"):
-                parts.append(f"{stage}: source\n```python\n{spec['source'].rstrip()}\n```")
-            else:
-                parts.append(f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip())
+        parts += [self._stage_text(stage, spec, view) for stage, spec in record["graph"]["stages"].items()]
         parts += [f"- {r['stage']}: rejected at the {r['tier']} tier: {r['reason']}" for r in record["reasons"]]
         for o in record.get("output", ()):
             parts.append(f"- printed by {o['stage']} at the {o['tier']} tier:\n" + "\n".join("    " + line for line in o["text"].splitlines()))
@@ -483,17 +480,13 @@ class Arena:
         if what == "entry":
             if not self.open_code:
                 raise ContractError("this contest is closed: entries show what they scored, not what they submitted")
-            wanted = str(action.get("id", ""))
-            c.reads.append((c.turns, f"entry {wanted}"))
+            wanted, view = str(action.get("id", "")), self._view(action)
+            c.reads.append((c.turns, f"entry {wanted}" + (" (outline)" if view == "outline" else "")))
             for record in reversed(self.journal.records("submission")):
                 if wanted in record.get("entry_ids", ()):
                     parts = [f"Entry {wanted} by {record['contestant']}: {record['speedup']:.3g}x ({record['klass']}). "
                              f"Their note: {record.get('note') or '(none)'}"]
-                    for stage, spec in record["graph"]["stages"].items():
-                        if spec.get("source"):
-                            parts.append(f"{stage}: source\n```python\n{spec['source'].rstrip()}\n```")
-                        else:
-                            parts.append(f"{stage}: {spec['impl']} {spec.get('params') or ''}".rstrip())
+                    parts += [self._stage_text(stage, spec, view) for stage, spec in record["graph"]["stages"].items()]
                     return "\n".join(parts)
             recorded = self._recorded_entry(wanted)
             if recorded is None:
@@ -502,13 +495,44 @@ class Arena:
         if what == "attempt":
             if not self.open_code:
                 raise ContractError("this contest is closed: nobody sees what another contestant checked")
-            wanted = str(action.get("id", ""))
-            c.reads.append((c.turns, f"attempt {wanted}"))
+            wanted, view = str(action.get("id", "")), self._view(action)
+            c.reads.append((c.turns, f"attempt {wanted}" + (" (outline)" if view == "outline" else "")))
             for record in reversed(self.attempts()):
                 if record["id"] == wanted:
-                    return self._attempt_text(record)
+                    return self._attempt_text(record, view)
             raise ContractError(f"no attempt {wanted!r} is recorded for this scene")
-        raise ContractError('look takes "what": "card" (with a stage), "entry" or "attempt" (with an id), or "board"')
+        if what == "diff":
+            return self._diff(c, str(action.get("a", "")), str(action.get("b", "")), action.get("stage"))
+        raise ContractError('look takes "what": "card" (with a stage), "entry" or "attempt" (with an id), "diff" (with a and b), or "board"')
+
+    @staticmethod
+    def _view(action: Mapping[str, Any]) -> str:
+        view = action.get("view", "source")
+        if view not in ("source", "outline"):
+            raise ContractError('"view" is "source" (the whole source, the default) or "outline" (its structure)')
+        return view
+
+    @staticmethod
+    def _stage_text(stage: str, spec: Mapping[str, Any], view: str = "source") -> str:
+        if not spec.get("source"):
+            return f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip()
+        if view == "outline":
+            return f"{stage}: source outline (look again without a view for the whole source)\n{outline(spec['source'])}"
+        return f"{stage}: source\n```python\n{spec['source'].rstrip()}\n```"
+
+    def _diff(self, c: Contestant, a: str, b: str, stage: Any) -> str:
+        """What changed in the source from one attempt or entry to another, for each stage both have source for."""
+        first, second = self._record_of(a, c), self._record_of(b, c)
+        have = [s for s, x in first["graph"]["stages"].items()
+                if x.get("source") and (second["graph"]["stages"].get(s) or {}).get("source")]
+        if stage is not None:
+            have = [s for s in have if s == stage]
+        if not have:
+            raise ContractError(f"{a} and {b} have no stage with source in common" + (f" for {stage}" if stage else ""))
+        c.reads.append((c.turns, f"diff {a} {b}"))
+        return "\n".join(f"{s}: what changed from {a} to {b}\n"
+                         + source_diff(first["graph"]["stages"][s]["source"], second["graph"]["stages"][s]["source"], old_name=a, new_name=b)
+                         for s in have)
 
     def _recorded_entry(self, wanted: str) -> str | None:
         """An entry on the board that did not come from this contest (a person's, or an earlier run's), described from the
@@ -563,8 +587,8 @@ class Arena:
             proposals[stage] = Proposal.from_dict(body)
         return proposals
 
-    def _source_of(self, wanted: str, stage: str, c: Contestant | None) -> tuple[str, str]:
-        """``(source, entry)`` of ``stage`` in an earlier attempt or entry: yours, or anyone's while the contest is open."""
+    def _record_of(self, wanted: str, c: Contestant | None) -> Mapping[str, Any]:
+        """The record of an earlier attempt or entry: yours, or anyone's while the contest is open."""
         found = None
         for record in reversed(self.attempts()):
             if record["id"] == wanted:
@@ -579,6 +603,11 @@ class Arena:
             raise ContractError(f"no attempt or entry {wanted!r} is recorded for this scene")
         if not self.open_code and (c is None or found["contestant"] != c.name):
             raise ContractError("this contest is closed: you can build on your own attempts and entries only")
+        return found
+
+    def _source_of(self, wanted: str, stage: str, c: Contestant | None) -> tuple[str, str]:
+        """``(source, entry)`` of ``stage`` in an earlier attempt or entry: yours, or anyone's while the contest is open."""
+        found = self._record_of(wanted, c)
         specs = found["graph"]["stages"]
         spec = specs.get(stage)
         if not spec or not spec.get("source"):
