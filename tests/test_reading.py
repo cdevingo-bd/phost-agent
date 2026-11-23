@@ -55,3 +55,11 @@ def test_a_diff_shows_only_what_changed_and_is_cut_when_it_is_long():
     assert source_diff(SOURCE, SOURCE) == "identical source"
     huge = source_diff("\n".join(f"a{i}" for i in range(2000)), "\n".join(f"b{i}" for i in range(2000)))
     assert len(huge) <= DIFF_LIMIT + 60 and "more diff lines not shown" in huge
+
+
+def test_a_long_annotated_argument_list_is_shown_as_names_so_the_outline_reaches_the_end_of_the_source():
+    kernel = ("import warp as wp\n\n@wp.kernel\ndef k(" + ", ".join(f"a{i}: wp.array2d(dtype=wp.float32)" for i in range(14)) + "):\n    pass\n\n"
+              "class Runtime:\n    def solve(self, system):\n        pass\n")
+    text = outline(kernel)
+    assert "@wp.kernel def k(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13)" in text and "wp.array2d" not in text
+    assert "class Runtime" in text and "def solve(self, system)" in text and not text.endswith("…")

@@ -41,7 +41,8 @@ Reply with one JSON object per turn:
   {"action": "look", "what": "card", "stage": "<stage>"}       the stage's full card (pinned at the top)
   {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: stages, parameters, source
   {"action": "look", "what": "attempt", "id": "<attempt id>"}  a check anyone ran: its source and the whole reason it failed (open contests)
-      add "view": "outline" to either for the structure of its source (size, imports, classes and functions, comments) instead of all of it
+      Another contestant's source is shown as an outline (size, imports, classes and functions, comments); add "view": "source" for
+      all of it. Your own is shown whole; add "view": "outline" for the outline.
   {"action": "look", "what": "diff", "a": "<id>", "b": "<id>"}  what changed in the source from one attempt or entry to another
   {"action": "look", "what": "board"}                          the whole board now
   {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note goes in your notebook
@@ -53,7 +54,7 @@ Reply with one JSON object per turn:
         | {"entry": "Runtime"}                                         source you write, in a python block
         | {"base": "<attempt or entry id>"}                            an earlier attempt's or entry's source, as it was or edited
 
-Source goes in a ```python <stage> block after the JSON (the stage's name after "python"), not inside the JSON; `"source": "..."`
+Only an action does anything: a reply with none is a turn spent. Source goes in a ```python <stage> block after the JSON (the stage's name after "python"), not inside the JSON; `"source": "..."`
 in the stage's object also works. The runtime class is the whole candidate (see the card). An edit to a base goes in an
 ```edit <stage> block: hunks of <<<<<<< SEARCH, the old lines, =======, the new lines, >>>>>>> REPLACE, each SEARCH matching one
 place in the base's source; with no edit block a base runs as it is. With several actions, a stage's python and edit blocks are
@@ -164,21 +165,33 @@ _PY = re.compile(r"```(?:python|py)[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | 
 _EDIT = re.compile(r"```edit[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | re.I)
 
 
+def _objects(body: str):
+    """Every JSON object in ``body``, in order. A reply is written by a model, which puts a raw newline inside a string (source pasted
+    into ``"source"``) often enough that strict JSON refuses it: those are read with control characters allowed."""
+    strict, lenient = json.JSONDecoder(), json.JSONDecoder(strict=False)
+    i = body.find("{")
+    while i != -1:
+        obj = None
+        for decoder in (strict, lenient):
+            try:
+                obj, _ = decoder.raw_decode(body[i:])
+                break
+            except json.JSONDecodeError:
+                continue
+        if isinstance(obj, dict):
+            yield obj
+        i = body.find("{", i + 1)
+
+
 def parse_action(text: str) -> tuple[dict[str, Any], list[tuple[str, str]]]:
     """``(the JSON action, [(stage tag, source), ...])`` from a reply. Raises ValueError, whose message goes back to the model."""
     if not text or not text.strip():
         raise ValueError("the reply was empty")
     blocks = [(tag, code.strip("\n") + "\n") for tag, code in _PY.findall(text)]
     body = _PY.sub("", text)
-    decoder, i = json.JSONDecoder(), body.find("{")
-    while i != -1:
-        try:
-            obj, _ = decoder.raw_decode(body[i:])
-        except json.JSONDecodeError:
-            obj = None
-        if isinstance(obj, dict) and "action" in obj:
+    for obj in _objects(body):
+        if "action" in obj:
             return obj, blocks
-        i = body.find("{", i + 1)
     raise ValueError('no JSON object with an "action" was found')
 
 
@@ -232,20 +245,14 @@ def parse_actions(text: str) -> tuple[list[dict[str, Any]], Blocks]:
     python = [(tag, code.strip("\n") + "\n") for tag, code in _PY.findall(text)]
     edits = [(tag, code) for tag, code in _EDIT.findall(text)]
     body = _EDIT.sub("", _PY.sub("", text))
-    decoder, i = json.JSONDecoder(), body.find("{")
-    while i != -1:
-        try:
-            obj, _ = decoder.raw_decode(body[i:])
-        except json.JSONDecodeError:
-            obj = None
-        if isinstance(obj, dict) and isinstance(obj.get("actions"), list):
+    for obj in _objects(body):
+        if isinstance(obj.get("actions"), list):
             actions = obj["actions"]
             if not actions or not all(isinstance(a, dict) and "action" in a for a in actions):
                 raise ValueError('"actions" is a non-empty list of objects, each with an "action"')
             return actions, Blocks(python, edits)
-        if isinstance(obj, dict) and "action" in obj:
+        if "action" in obj:
             return [obj], Blocks(python, edits)
-        i = body.find("{", i + 1)
     raise ValueError('no JSON object with an "action" (or "actions") was found')
 
 

@@ -29,10 +29,18 @@ def _modules(tree: ast.AST) -> list[str]:
     return sorted(found)
 
 
+ARGUMENTS = 80               # a longer argument list is shown as the names alone (a GPU kernel's annotated arrays take half an outline)
+
+
 def _signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
     decorators = "".join(f"@{ast.unparse(d)} " for d in node.decorator_list)
+    arguments = ast.unparse(node.args)
+    if len(arguments) > ARGUMENTS:
+        args = node.args
+        names = [a.arg for a in [*args.posonlyargs, *args.args, *args.kwonlyargs]]
+        arguments = ", ".join(names + (["*" + args.vararg.arg] if args.vararg else []) + (["**" + args.kwarg.arg] if args.kwarg else []))
     returns = f" -> {ast.unparse(node.returns)}" if node.returns else ""
-    return f"{decorators}def {node.name}({ast.unparse(node.args)}){returns}"
+    return f"{decorators}def {node.name}({arguments}){returns}"
 
 
 def outline(source: str, *, limit: int = OUTLINE_LIMIT) -> str:

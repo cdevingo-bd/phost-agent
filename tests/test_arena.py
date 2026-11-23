@@ -561,27 +561,55 @@ def test_older_turns_in_the_window_name_the_id_their_code_is_kept_under_and_that
     assert sent[3] < [t["sent"]["chars"] for t in whole.journal.records("arena") if t.get("phase") == "turn"][3]
 
 
-def test_an_outline_and_a_diff_are_cheaper_ways_to_read_and_the_whole_source_is_still_there(tmp_path, registry):
+def test_another_contestants_source_is_shown_as_an_outline_unless_the_whole_is_asked_for_and_your_own_is_shown_whole(tmp_path, registry):
     graph = {"stages": {STAGE: {"entry": "Runtime"}}}
     alpha = Dyn(act(action="check", graph=graph, note="dense", _blocks=SOURCE_REQUEST),
                 act(action="check", graph=graph, _blocks=SOURCE_REQUEST.replace("float64 dense solve", "float32 dense solve")))
     a = arena(tmp_path, registry, ("alpha", alpha), allow_unsandboxed=True, turns=2)
     a.run()
     first, second = a.attempts()
-    reader = Dyn(act(action="look", what="attempt", id=first["id"], view="outline"), act(action="look", what="attempt", id=first["id"]),
+    reader = Dyn(act(action="look", what="attempt", id=first["id"]), act(action="look", what="attempt", id=first["id"], view="source"),
                  act(action="look", what="diff", a=first["id"], b=second["id"]), act(action="look", what="attempt", id=first["id"], view="bogus"),
                  act(action="look", what="diff", a=first["id"], b="deadbeef"))
     b = arena(tmp_path, registry, ("beta", reader), allow_unsandboxed=True, turns=6)
     b.run()
-    results = [call["messages"][-1]["content"] for call in reader.calls[1:]]
-    outlined, whole, diffed, bad, missing = results[:5]
+    outlined, whole, diffed, bad, missing = [call["messages"][-1]["content"] for call in reader.calls[1:]][:5]
     assert "source outline" in outlined and "class Runtime" in outlined and "```python" not in outlined and "np.linalg.solve" not in outlined
+    assert "'view': 'source'" in outlined                                                            # and it says how to get the whole
     assert "```python" in whole and "np.linalg.solve" in whole and len(outlined) < 0.6 * len(whole)
-    assert f"what changed from {first['id']} to {second['id']}" in diffed and "-" in diffed and "float32 dense solve" in diffed
+    assert f"what changed from {first['id']} to {second['id']}" in diffed and "float32 dense solve" in diffed
     assert "float64 dense solve" in diffed and "np.linalg.solve" not in diffed                    # only the changed line and its neighbours
     assert '"view" is "source"' in bad and "no attempt or entry 'deadbeef'" in missing
-    notebook_reads = [label for _, label in b.by_name["beta"].reads]
-    assert f"attempt {first['id']} (outline)" in notebook_reads and f"diff {first['id']} {second['id']}" in notebook_reads
+    reads = [label for _, label in b.by_name["beta"].reads]
+    assert f"attempt {first['id']} (outline)" in reads and f"diff {first['id']} {second['id']}" in reads
+    own = Dyn(act(action="look", what="attempt", id=first["id"]), act(action="look", what="attempt", id=first["id"], view="outline"))
+    mine = arena(tmp_path, registry, ("alpha", own), allow_unsandboxed=True, turns=3)
+    mine.run()
+    assert "```python" in own.calls[1]["messages"][-1]["content"]                                   # your own: whole by default
+    assert "source outline" in own.calls[2]["messages"][-1]["content"]                              # ... and the outline if you ask
+
+
+def test_a_reply_with_no_action_is_cut_in_the_conversation_at_once_and_the_journal_keeps_what_it_was(tmp_path, registry):
+    chatter = "I looked at everything and here is where things stand. " * 80
+    model = Dyn(Reply(chatter, 100, 900), act(action="look", what="board"), act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", model), turns=3)
+    a.run()
+    kept = a.by_name["alpha"].exchanges[0].assistant
+    assert len(kept) < 600 and "are not repeated here" in kept and kept.startswith("I looked at everything")
+    assert chatter not in "".join(m["content"] for m in model.calls[2]["messages"])
+    (turn,) = [t for t in a.journal.records("arena") if t.get("phase") == "turn" and t["action"] == "(unreadable)"]
+    assert turn["reply_head"].startswith("I looked at everything") and turn["reply_tail"] and turn["mentions_action"] is False
+    assert turn["reply_chars"] == len(chatter)
+
+
+def test_a_json_action_with_a_raw_newline_inside_a_string_is_read():
+    from phost_agent.arena_text import parse_actions
+    reply = '{"action": "check", "graph": {"stages": {"s": {"entry": "Runtime", "source": "class Runtime:\n    pass"}}}, "note": "a\nb"}'
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(reply)                                                                          # real newlines inside the strings
+    actions, _ = parse_actions(reply)
+    assert actions[0]["action"] == "check" and actions[0]["graph"]["stages"]["s"]["source"] == "class Runtime:\n    pass"
+    assert parse_actions('{"actions": [{"action": "look", "what": "board"}]}')[0][0]["what"] == "board"
 
 
 def test_a_closed_contest_lets_nobody_outline_or_diff_what_another_contestant_wrote(tmp_path, registry):

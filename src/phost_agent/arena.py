@@ -30,6 +30,8 @@ from .cards import render_card, source_skeleton, stage_card
 from .ceiling import check_ceiling
 from .checker import run_check
 from .reading import outline, source_diff
+
+UNREAD_KEPT = 400                                      # characters of a reply with no action that stay in the conversation
 from .context import WHOLE_TURNS, Exchange, assemble, condense, notebook_text, pinned_text, trim
 from .edits import apply_hunks, line_changes, parse_hunks
 from .facts import facts_block, facts_identity, probe_source
@@ -368,9 +370,13 @@ class Arena:
             text, action = "The model declined to answer.", "(declined)"
         else:
             action, text = self._act(c, reply.text)
-        c.exchanges = window + [Exchange(c.turns, c.pending, reply.text.strip() or "(empty)")]
+        said = reply.text.strip() or "(empty)"
+        if action == "(unreadable)" and len(said) > UNREAD_KEPT:           # nothing in it was an action: do not carry it for six turns
+            said = said[:UNREAD_KEPT].rstrip() + f"\n[{len(said) - UNREAD_KEPT} more characters, with no action in them, are not repeated here]"
+        c.exchanges = window + [Exchange(c.turns, c.pending, said)]
         c.pending = text
-        unread = dict(reply_head=redact(reply.text.strip()[:600])) if action == "(unreadable)" else {}     # so it can be diagnosed
+        unread = (dict(reply_head=redact(reply.text.strip()[:400]), reply_tail=redact(reply.text.strip()[-400:]) if len(reply.text.strip()) > 400 else "",
+                       reply_chars=len(reply.text), mentions_action='"action"' in reply.text) if action == "(unreadable)" else {})    # to diagnose it
         self.journal.append("arena", phase="turn", contestant=c.name, turn=c.turns, action=action, tokens=reply.tokens, **unread,
                             input_tokens=reply.input_tokens, output_tokens=reply.output_tokens, cached_tokens=reply.cached_tokens,
                             estimated=reply.estimated, contest=self.contest,
@@ -480,14 +486,16 @@ class Arena:
         if what == "entry":
             if not self.open_code:
                 raise ContractError("this contest is closed: entries show what they scored, not what they submitted")
-            wanted, view = str(action.get("id", "")), self._view(action)
-            c.reads.append((c.turns, f"entry {wanted}" + (" (outline)" if view == "outline" else "")))
+            wanted = str(action.get("id", ""))
             for record in reversed(self.journal.records("submission")):
                 if wanted in record.get("entry_ids", ()):
+                    view = self._view(action, record["contestant"], c)
+                    c.reads.append((c.turns, f"entry {wanted}" + (" (outline)" if view == "outline" else "")))
                     parts = [f"Entry {wanted} by {record['contestant']}: {record['speedup']:.3g}x ({record['klass']}). "
                              f"Their note: {record.get('note') or '(none)'}"]
                     parts += [self._stage_text(stage, spec, view) for stage, spec in record["graph"]["stages"].items()]
                     return "\n".join(parts)
+            c.reads.append((c.turns, f"entry {wanted}"))
             recorded = self._recorded_entry(wanted)
             if recorded is None:
                 raise ContractError(f"no entry {wanted!r} is on this board")
@@ -495,21 +503,24 @@ class Arena:
         if what == "attempt":
             if not self.open_code:
                 raise ContractError("this contest is closed: nobody sees what another contestant checked")
-            wanted, view = str(action.get("id", "")), self._view(action)
-            c.reads.append((c.turns, f"attempt {wanted}" + (" (outline)" if view == "outline" else "")))
+            wanted = str(action.get("id", ""))
             for record in reversed(self.attempts()):
                 if record["id"] == wanted:
+                    view = self._view(action, record["contestant"], c)
+                    c.reads.append((c.turns, f"attempt {wanted}" + (" (outline)" if view == "outline" else "")))
                     return self._attempt_text(record, view)
+            c.reads.append((c.turns, f"attempt {wanted}"))
             raise ContractError(f"no attempt {wanted!r} is recorded for this scene")
         if what == "diff":
             return self._diff(c, str(action.get("a", "")), str(action.get("b", "")), action.get("stage"))
         raise ContractError('look takes "what": "card" (with a stage), "entry" or "attempt" (with an id), "diff" (with a and b), or "board"')
 
     @staticmethod
-    def _view(action: Mapping[str, Any]) -> str:
-        view = action.get("view", "source")
+    def _view(action: Mapping[str, Any], owner: str, c: Contestant) -> str:
+        """What a look at someone's source shows: the whole of your own, the outline of another's unless the whole is asked for."""
+        view = action.get("view", "source" if owner == c.name else "outline")
         if view not in ("source", "outline"):
-            raise ContractError('"view" is "source" (the whole source, the default) or "outline" (its structure)')
+            raise ContractError('"view" is "source" (all of it) or "outline" (its structure)')
         return view
 
     @staticmethod
@@ -517,7 +528,7 @@ class Arena:
         if not spec.get("source"):
             return f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip()
         if view == "outline":
-            return f"{stage}: source outline (look again without a view for the whole source)\n{outline(spec['source'])}"
+            return f"{stage}: source outline (look again with 'view': 'source' for all of it)\n{outline(spec['source'])}"
         return f"{stage}: source\n```python\n{spec['source'].rstrip()}\n```"
 
     def _diff(self, c: Contestant, a: str, b: str, stage: Any) -> str:

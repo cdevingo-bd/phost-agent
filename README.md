@@ -141,12 +141,22 @@ must match one place, and a refusal says where the nearest text is). A fork of a
 retyping. The result of a check names its attempt id and the result of a timed run its entry ids.
 
 **Cheaper ways to read (`reading.py`).** The measured cost of a contest was mostly full-source `look`s at other entries (about 8k
-characters each, sent again for a turn or two). `look` on an entry or an attempt takes `"view": "outline"`: the size of the source, what
-it imports, its classes and functions with the first line of each docstring, and its first comments, about a tenth of the whole.
-`{"action": "look", "what": "diff", "a": <id>, "b": <id>}` gives what changed in the source from one attempt or entry to another (a
-unified diff with two lines of context, cut at 3 000 characters). Both are views of the same record, offered beside the whole source,
-which is still the default, and a contest that is closed still shows only a contestant's own work. The journal records what was read
-(`entry <id> (outline)`, `diff <a> <b>`) so the notebook says so.
+characters each, sent again for a turn or two). A `look` at an entry or attempt that is *another contestant's* now returns its
+outline by default: the size of the source, what it imports, its classes and functions (a long argument list as the names alone) with the
+first line of each docstring, and its first comments. On the 19 sources in a real journal that is 8% of the whole (136k characters to
+11k). `"view": "source"` gives all of it; your own work is shown whole by default and `"view": "outline"` gives yours as an outline.
+`{"action": "look", "what": "diff", "a": <id>, "b": <id>}` gives what changed from one attempt or entry to another (a unified diff with
+two lines of context, cut at 3 000 characters). A fork with `base` needs neither: the source is taken from the record, not from what the
+model has read. A contest that is closed still shows only a contestant's own work, and the journal records what was read (`entry <id>
+(outline)`, `diff <a> <b>`) so the notebook says so. Whether models take the cheaper read, or ask for the whole source every time, and what
+that does to the best entry, is not measured.
+
+**Replies with no action.** In two real runs a model answered, after a few looks, with a status report in prose and no action (2.6k and
+3.2k tokens out, and 15k of input around it: about a seventh of the second run). Now: a reply is read with control characters allowed
+inside strings (source pasted into `"source"` has raw newlines, which strict JSON refuses); the prose of a reply with no action stays in
+the conversation as its first 400 characters instead of for six turns; the rules say that only an action does anything; and the journal
+keeps the head and tail of such a reply, its length and whether it mentioned an action at all (`mentions_action`: false is prose,
+true is a malformed action), so the next one can be told apart.
 
 **Several actions in a turn.** `{"actions": [...]}` holds up to 6 look, check and submit actions, run in order, each answered under its
 own header; a failing one does not stop the others. A turn is one call to the model and counts once against the turns however many
