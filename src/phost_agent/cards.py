@@ -59,15 +59,19 @@ def stage_card(registry: phost.Registry, stage: str) -> dict[str, Any]:
     return card
 
 
-def source_skeleton(card: Mapping[str, Any]) -> str:
+def source_skeleton(card: Mapping[str, Any], *, list_ports: bool = True) -> str:
+    """The shape of a runtime for the stage. ``list_ports=False`` leaves out the per-port comment, for a card whose table has it."""
     ports = "".join(f"\n        #   {p['name']:<14} {p['role']:<6} {p['dtype']:<8} shape {tuple(p['shape'])}" for p in card["ports"])
+    if not list_ports:
+        ports = " one for each port in the table above"
     entry = card["entry"] or "run"
     ref = ""
     if card["reference"] == "impl":
         ref = "\n\ndef reference(inputs, params):\n    \"\"\"Your own float64 version of what the runtime computes: outputs by port name.\"\"\"\n    ..."
     dims = {d.rstrip("+") for p in card["ports"] for d in p["shape"] if isinstance(d, str)}
     padded = any(isinstance(d, str) and d.endswith("+") for p in card["ports"] for d in p["shape"])
-    notes = "\n        # system.<port> is the array for that port: " + ", ".join(f"system.{p['name']}" for p in card["ports"])
+    notes = ("\n        # system.<port> is the array for that port: " + ", ".join(f"system.{p['name']}" for p in card["ports"])
+             if list_ports else "\n        # system.<port> is the array for that port, named as in the table")
     if "nv" in dims:
         notes += ("\n        # nv is self.host.facts().nv" + (" (also .world_count). A trailing + (nv+) means at least that size: hosts "
                                                            "pad, so use the first nv entries, not the array's own size" if padded else ""))
@@ -96,27 +100,46 @@ def task_brief(task: Task, world: World, gate: Gate | None, budget: Budget | Non
     )
 
 
-def render_card(card: Mapping[str, Any]) -> str:
-    lines = [f"# stage {card['name']} (v{card['version']})", "", card["doc"], "",
-             f"swap class **{card['swap_class']}**: {card['judging']}", ""]
+def render_card(card: Mapping[str, Any], *, compact: bool = False) -> str:
+    """The card as Markdown. ``compact`` keeps what every candidate needs (ports, invariants, what is gated, which implementations
+    exist) and leaves for a look at the stage what only matters when building on something: the implementations' parameters, the
+    definition of each metric that is not gated, and the typed law."""
+    judged = "" if compact else f": {card['judging']}"
+    lines = [f"# stage {card['name']} (v{card['version']})", "", card["doc"], "", f"swap class **{card['swap_class']}**{judged}", ""]
     if card["entry"]:
         lines += [f"The host calls `{card['entry']}` on the runtime once per execution of the stage.", ""]
     lines += ["## ports", "", "| name | role | dtype | shape | meaning |", "| --- | --- | --- | --- | --- |"]
     lines += [f"| {p['name']} | {p['role']} | {p['dtype']} | {tuple(p['shape'])} | {p['doc']} |" for p in card["ports"]]
     if card["invariants"]:
         lines += ["", "## invariants", ""] + [f"- {i}" for i in card["invariants"]]
-    if card["metrics"]:
-        lines += ["", "## metrics", ""] + [f"- `{m['name']}` ({m['unit']}, {m['better']} is better, {m['kind']}): {m['doc']}"
-                                         for m in card["metrics"]]
-    if card["tolerances"]:
-        lines += ["", "## gates", ""] + [f"- `{t['metric']}` must stay at or below {t['max']}" for t in card["tolerances"]]
-    if card["equation"]:
-        lines += ["", "## typed law", "", f"The stage takes a typed law: `{card['equation']}`"]
+    gates = {t["metric"]: t["max"] for t in card["tolerances"]}
+    if compact:
+        gated = [m for m in card["metrics"] if m["name"] in gates]
+        others = [m["name"] for m in card["metrics"] if m["name"] not in gates]
+        if gated:
+            lines += ["", "## gates (a runtime's `metrics()` may report these)", ""]
+            lines += [f"- `{m['name']}` must stay at or below {gates[m['name']]}: {m['doc']}" for m in gated]
+        if others:
+            lines += ["", "Other metrics: " + ", ".join(f"`{n}`" for n in others) + "."]
+    else:
+        if card["metrics"]:
+            lines += ["", "## metrics", ""] + [f"- `{m['name']}` ({m['unit']}, {m['better']} is better, {m['kind']}): {m['doc']}"
+                                             for m in card["metrics"]]
+        if card["tolerances"]:
+            lines += ["", "## gates", ""] + [f"- `{t['metric']}` must stay at or below {t['max']}" for t in card["tolerances"]]
+        if card["equation"]:
+            lines += ["", "## typed law", "", f"The stage takes a typed law: `{card['equation']}`"]
     lines += ["", "## implementations", ""]
     for impl in card["impls"]:
-        specs = ", ".join(f"{p['name']}:{p['type']}={p['default']!r}" for p in impl["params"]) or "no params"
         extra = f" [{impl['swap_class']}]" if impl["swap_class"] else ""
+        if compact:
+            lines.append(f"- `{impl['id']}` ({impl['kind']}{extra}) {impl['title']}")
+            continue
+        specs = ", ".join(f"{p['name']}:{p['type']}={p['default']!r}" for p in impl["params"]) or "no params"
         lines.append(f"- `{impl['id']}` ({impl['kind']}{extra}) {impl['title']}: {specs}" + (f". {impl['fit']}" if impl["fit"] else ""))
+    if compact:
+        lines += ["", "(Compact card. Looking at the stage pins the full one: the implementations' parameters, every metric's "
+                      "definition and the typed law.)"]
     return "\n".join(lines) + "\n"
 
 

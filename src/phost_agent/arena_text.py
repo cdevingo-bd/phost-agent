@@ -12,50 +12,50 @@ from .cards import JUDGING, stage_card
 from .diagnostics import LIMIT
 
 INTRO = """\
-You are one of several language models competing on a leaderboard. Everyone is given the same simulator scene. The board ranks
-every entry by how much faster it makes the whole simulation step than the host's own, while the trajectory stays right.
-What to try is yours to decide: replace any stage, with an implementation that exists or with code you write, replace several
-stages at once, start from a rival's entry on the board, or do something else the rules allow. Nobody here tells you how.
+You are one of several language models competing on a leaderboard, all given the same simulator scene. The board ranks entries by
+how much faster they make the whole simulation step than the host's own, while the trajectory stays right. What to try is yours:
+replace any stage or several, with an implementation that exists or code you write, start from a rival's entry, or do anything
+else the rules allow. Nobody here tells you how.
 """
 
 RULES = """\
 How entries are judged (the rules, not advice):
-- An entry is a graph: for each stage it replaces, either a registered implementation with parameters or the source of a Python
-  runtime class. Stages it does not name stay the host's own.
-- Each replaced stage is run through that stage's contract checks against a float64 reference before anything is timed. `check`
-  runs only these, and costs a turn, not a timed run. Whatever your runtime `print`s while they run comes back with the result,
-  passed or failed (the first {printed} characters; identical lines in a row are folded).
-- A timed run steps the scene with your graph and with the host's own graph from the same start state, at several world counts,
-  and measures the speed ratio and how far your trajectory drifts from the host's. Timed runs have the device to themselves and
-  are the scarce thing: you have a fixed number.
-- Entries are ranked only against comparable entries: same scene, device and world count, and the same swap class. By class:
+- An entry is a graph: for each stage it replaces, a registered implementation with parameters, or the source of a Python runtime
+  class. Stages it does not name stay the host's own.
+- Each replaced stage runs its contract checks against a float64 reference before anything is timed. `check` runs only these and
+  costs a turn, not a timed run. Whatever your runtime `print`s while they run comes back with the result, passed or failed (the
+  first {printed} characters; identical lines in a row are folded).
+- A timed run steps the scene with your graph and with the host's own from the same start state, at several world counts, and
+  measures the speed ratio and how far your trajectory drifts from the host's. Timed runs have the device to themselves and are
+  scarce: you have a fixed number.
+- Entries rank only against comparable ones: same scene, device and world count, and swap class:
 {classes}
-- A run whose timing is flagged unreliable is not ranked; submit it again. Only the latest run of the same graph under your name
-  counts, so repeating an entry only re-measures it.
+- A run whose timing is flagged unreliable is not ranked; submit it again. Only your latest run of the same graph counts, so
+  repeating an entry only re-measures it.
 - {visibility}
 """
 
 ACTIONS = """\
 Reply with one JSON object per turn:
 
-  {"action": "look", "what": "card", "stage": "<stage>"}       a stage's full card, pinned at the top of the conversation
-  {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: its stages, parameters and source
+  {"action": "look", "what": "card", "stage": "<stage>"}       the stage's full card (pinned at the top)
+  {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: stages, parameters, source
   {"action": "look", "what": "attempt", "id": "<attempt id>"}  a check anyone ran: its source and the whole reason it failed (open contests)
-  {"action": "look", "what": "board"}                          the whole board as it is now
-  {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note is kept in your notebook
+  {"action": "look", "what": "board"}                          the whole board now
+  {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note goes in your notebook
   {"action": "submit", "graph": GRAPH, "note": "<why>"}        check, time and rank it: uses one of your timed runs
-  {"actions": [ACTION, ...]}                                   up to {max_actions} of the above in one turn, run in order
+  {"actions": [ACTION, ...]}                                   up to {max_actions} of the above in one turn, in order
 
   GRAPH = {"stages": {"<stage>": NODE}}
   NODE  = {"impl": "<registered id>", "params": {"<name>": <value>}}   a registered implementation
         | {"entry": "Runtime"}                                         source you write, in a python block
-        | {"base": "<attempt or entry id>"}                            the source of an earlier attempt or entry, as it was or edited
+        | {"base": "<attempt or entry id>"}                            an earlier attempt's or entry's source, as it was or edited
 
-Source for a stage goes in a ```python <stage> block after the JSON (the stage's name after "python"), not inside the JSON;
-`"source": "..."` inside the stage's object also works. The runtime class is the whole candidate: see the stage's card.
-An edit to a base goes in an ```edit <stage> block: hunks of <<<<<<< SEARCH, the old lines, =======, the new lines, >>>>>>> REPLACE;
-each SEARCH must match one place in the base's source. With no edit block, a base is run as it is. With several actions, a stage's
-python and edit blocks are used in the order the actions come, so tag each with its stage.
+Source goes in a ```python <stage> block after the JSON (the stage's name after "python"), not inside the JSON; `"source": "..."`
+in the stage's object also works. The runtime class is the whole candidate (see the card). An edit to a base goes in an
+```edit <stage> block: hunks of <<<<<<< SEARCH, the old lines, =======, the new lines, >>>>>>> REPLACE, each SEARCH matching one
+place in the base's source; with no edit block a base runs as it is. With several actions, a stage's python and edit blocks are
+used in the order the actions come, so tag each with its stage.
 """
 
 def classes_text(registry: phost.Registry, stages: Sequence[str]) -> str:
@@ -102,16 +102,17 @@ def facts_text(report: Mapping[str, Any] | None, scene: str, worlds: int) -> str
 
 
 CONTEXT = """\
-What you are shown each turn: the result of your last turn, a notebook of your earlier checks and timed runs that are no longer in
-this conversation (one line each, with the ids you can look at or build on), and what is new on the board and in the others' checks
-since your last move. The conversation keeps your last {keep} turns word for word. The cards of the stages whose speed is ranked are
-pinned at the top, with what a check's inputs measured on this scene; a card you look at is pinned there too. A turn is one call to
-you and counts once against your turns, however many actions it holds.
+Each turn you are shown the result of your last turn, a notebook of your earlier checks and timed runs that are no longer in the
+conversation (one line each, with ids you can look at or build on), and what is new on the board and in the others' checks. The
+conversation keeps your last {keep} turns: the newest {whole} whole; in the older ones a long result is cut and the code you wrote
+is replaced by the id it is kept under (look at the id, or build on it with base). Always write code itself in your reply.
+Compact cards of the stages whose speed is ranked are pinned at the top, with what a check's inputs measured on this scene;
+looking at a stage pins its full card. A turn is one call to you and counts once against your turns, however many actions it holds.
 """
 
 
 def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str, scene: str, worlds: Sequence[int],
-                  turns: int, submits: int, open_code: bool, feed: bool = True, keep: int = 6) -> str:
+                  turns: int, submits: int, open_code: bool, feed: bool = True, keep: int = 6, whole: int = 2) -> str:
     visibility = ("Everything you submit, source included, is visible to the other contestants, as theirs is to you." if open_code
                   else "Entries show on the board with what they scored, but not what they submitted.")
     if open_code and feed:
@@ -121,7 +122,7 @@ def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str
     return (INTRO + f"\nScene: {scene}. World counts timed: {', '.join(map(str, worlds))}; the board you see is for {max(worlds)} worlds.\n"
             f"Your budget: {turns} turns and {submits} timed runs. The contest ends for you when either is used up; "
             f"there is no other way to leave.\n\n" + facts + "\n\nStages you can replace:\n"
-            + stage_index(registry, stages) + "\n\n" + rules + "\n" + CONTEXT.format(keep=keep) + "\n"
+            + stage_index(registry, stages) + "\n\n" + rules + "\n" + CONTEXT.format(keep=keep, whole=whole) + "\n"
             + ACTIONS.replace("{max_actions}", str(MAX_ACTIONS)))
 
 

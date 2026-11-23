@@ -29,7 +29,7 @@ from .arena_text import (MAX_ACTIONS, facts_text, outcome_text, parse_actions, r
 from .cards import render_card, source_skeleton, stage_card
 from .ceiling import check_ceiling
 from .checker import run_check
-from .context import Exchange, assemble, notebook_text, pinned_text, trim
+from .context import WHOLE_TURNS, Exchange, assemble, condense, notebook_text, pinned_text, trim
 from .edits import apply_hunks, line_changes, parse_hunks
 from .facts import facts_block, facts_identity, probe_source
 from .funnel import Funnel, run_timed
@@ -92,6 +92,7 @@ class Contestant:
     board_seen: set = field(default_factory=set)      # entry ids it has been shown
     fed: set = field(default_factory=set)             # attempt ids it has been shown
     pinned: dict[str, str] = field(default_factory=dict)       # stage -> its card, shown at the top for the whole contest
+    full: set = field(default_factory=set)                     # the pinned stages whose card is in full (a stage it looked at)
     reads: list[tuple[int, str]] = field(default_factory=list)  # what it looked at, with the turn
     best: dict[str, Any] | None = None       # its fastest ranked entry
 
@@ -119,12 +120,14 @@ class Arena:
                  measure=None, check: Callable = run_check, timed: Callable = run_timed, allow_unsandboxed: bool = False,
                  candidates_dir=None, turns: int = 30, submits: int = 6, tokens: int | None = None, open_code: bool = True,
                  board_rows: int = 8, feed_rows: int = 10, max_tokens: int = 16000, keep_turns: int = 6,
-                 runtime_facts: bool = True, on_event: Callable[[Mapping[str, Any]], None] | None = None):
+                 runtime_facts: bool = True, preload: int = 3, whole_turns: int = WHOLE_TURNS, on_event: Callable[[Mapping[str, Any]], None] | None = None):
         names = [c.name for c in contestants]
         if len(contestants) < 1 or len(set(names)) != len(names):
             raise ValueError("an arena needs at least one contestant, each under its own name")
         if turns < 1 or submits < 1 or keep_turns < 1:
             raise ValueError("turns, submits and keep_turns must be at least 1")
+        if preload < 0:
+            raise ValueError("preload is the number of stage cards to start with, 0 or more")
         self.task, self.contestants = task, list(contestants)
         self.journal = journal if journal is not None else Journal()
         self.ledger = ledger if ledger is not None else Ledger(default_ledger())
@@ -137,6 +140,7 @@ class Arena:
         self.allow_unsandboxed, self.candidates_dir = allow_unsandboxed, candidates_dir
         self.turns, self.submits, self.tokens, self.open_code = turns, submits, tokens, open_code
         self.board_rows, self.max_tokens, self.keep_turns, self.runtime_facts = board_rows, max_tokens, keep_turns, runtime_facts
+        self.preload, self.whole_turns = preload, whole_turns
         self.feed_rows = feed_rows if open_code else 0              # a closed contest shows no one's work
         self.emit = on_event or (lambda event: None)
         self.worlds = max(task.worlds)
@@ -144,7 +148,7 @@ class Arena:
         self.facts, self.system = "", ""
         self.contest = ""                                    # names this contest in a journal that may hold several
         self.preloaded: list[str] = []                       # the stages whose cards every contestant starts with
-        self._cards: dict[str, str] = {}
+        self._cards: dict[tuple[str, bool], str] = {}
         self._forks: dict[str, dict[str, Any]] = {}          # source hash -> what it was edited from
 
     # ---- setup ------------------------------------------------------------------------------------------
@@ -171,12 +175,12 @@ class Arena:
         self.stage_names = listed
         self.system = redact(system_prompt(registry=self.registry, stages=listed, facts=self.facts, scene=self.task.scene,
                                            worlds=self.task.worlds, turns=self.turns, submits=self.submits, open_code=self.open_code,
-                                           feed=self.feed_rows > 0, keep=self.keep_turns))
-        self.preloaded = self._ranked_stages(report)
+                                           feed=self.feed_rows > 0, keep=self.keep_turns, whole=self.whole_turns))
+        self.preloaded = self._ranked_stages(report, self.preload)
         for stage in self.preloaded:
             self._card_text(stage)                       # measured once here, so no contestant spends a turn on it
 
-    def _ranked_stages(self, report: Mapping[str, Any] | None, limit: int = 3) -> list[str]:
+    def _ranked_stages(self, report: Mapping[str, Any] | None, limit: int) -> list[str]:
         """The stages whose swaps are ranked on speed (exact or approximate) and apply here, the biggest share of the step first."""
         if not report or "error" in report:
             return []
@@ -188,15 +192,18 @@ class Arena:
                   if info.get("applies") and info.get("swap_class") in ("exact", "approximate") and stage in self.stages]
         return [stage for _, stage in sorted(ranked, reverse=True)[:limit]]
 
-    def _card_text(self, stage: str) -> str:
-        """A stage's card with the skeleton of a runtime for it and what a check's inputs measured on this scene."""
-        if stage not in self._cards:
+    def _card_text(self, stage: str, full: bool = False) -> str:
+        """A stage's card with the skeleton of a runtime for it and what a check's inputs measured on this scene.
+
+        The compact card is what a contest starts with; the full one is what a look at the stage pins (see ``render_card``)."""
+        if (stage, full) not in self._cards:
             card = stage_card(self.registry, stage)
-            skeleton = source_skeleton(card).rstrip()
-            text = render_card(card) + "\n\n## the source of a candidate for this stage, as a skeleton\n\n```python\n" + skeleton + "\n```"
-            measured = self._measured(stage, card, skeleton) if self.runtime_facts else ""
-            self._cards[stage] = text + ("\n\n" + facts_block(measured) if measured else "")
-        return self._cards[stage]
+            skeleton = source_skeleton(card, list_ports=full).rstrip()
+            text = (render_card(card, compact=not full) + "\n\n## the source of a candidate for this stage, as a skeleton\n\n```python\n"
+                    + skeleton + "\n```")
+            measured = self._measured(stage, card, source_skeleton(card).rstrip()) if self.runtime_facts else ""
+            self._cards[stage, full] = text + ("\n\n" + facts_block(measured) if measured else "")
+        return self._cards[stage, full]
 
     def _measured(self, stage: str, card: Mapping[str, Any], skeleton: str) -> str:
         """What a probe printed at the real tier, from the journal if this scene and stage were measured before."""
@@ -313,11 +320,12 @@ class Arena:
         self.contest = hashlib.sha256(f"{self.task.scene}|{time.time()}".encode()).hexdigest()[:10]
         self.journal.append("arena", phase="start", task=self.task.to_dict(), contestants=[c.summary() for c in self.contestants],
                             budget=dict(turns=self.turns, submits=self.submits, tokens=self.tokens, open=self.open_code,
-                                        keep_turns=self.keep_turns),
+                                        keep_turns=self.keep_turns, whole_turns=self.whole_turns),
                             contest=self.contest, preloaded=list(self.preloaded))
         for c in self.contestants:
             c.pending = "The contest begins."
             c.pinned = {stage: self._card_text(stage) for stage in self.preloaded}
+            c.full = set()
         while True:
             playing = [c for c in self.contestants if not c.left]
             if not playing:
@@ -341,7 +349,8 @@ class Arena:
         notebook = self._notebook(c, window[0].turn if window else None)
         state = "\n\n".join(part for part in (notebook, self._board_state(c), self.feed_text(c)) if part)
         pinned = pinned_text(c.pinned)
-        messages = assemble(pinned, window, c.pending + "\n\n" + state)
+        messages = assemble(pinned, condense(window, whole=self.whole_turns, kept=self._kept(c) if len(window) > self.whole_turns else None),
+                            c.pending + "\n\n" + state)
         messages = [dict(role=m["role"], content=redact(m["content"])) for m in messages]      # everything sent, every time
         self._working(c, f"asking {c.client.model}")
         asked = time.monotonic()
@@ -376,6 +385,17 @@ class Arena:
     def _working(self, c: Contestant, what: str) -> None:
         """Say what is taking the time: a model call, a check, or a timed run that holds the device."""
         self.emit(dict(event="work", contestant=c.name, turn=c.turns, what=what))
+
+    def _kept(self, c: Contestant) -> dict[int, list[tuple[str, str]]]:
+        """For each of its turns, the attempts and entries its source was kept under, so an older reply can name them."""
+        kept: dict[int, list[tuple[str, str]]] = {}
+        for r in self.attempts():
+            if r["contestant"] == c.name and r.get("contest") == self.contest:
+                kept.setdefault(r["turn"], []).append(("attempt", r["id"]))
+        for r in self.journal.records("submission"):
+            if r.get("contest") == self.contest and r["contestant"] == c.name:
+                kept.setdefault(r["turn"], []).extend(("entry", i) for i in r.get("entry_ids") or [])
+        return kept
 
     def _notebook(self, c: Contestant, before: int | None) -> str:
         """The contestant's own checks and timed runs older than its window, compiled from the journal."""
@@ -447,11 +467,14 @@ class Arena:
             stage = str(action.get("stage", ""))
             if stage not in self.stages:
                 raise ContractError(f"no stage {stage!r}; the stages are {', '.join(self.stages)}")
-            if stage in c.pinned:
-                return f"The card for {stage} is already pinned at the top of this conversation."
-            c.pinned[stage] = self._card_text(stage)
+            if stage in c.full:
+                return f"The full card for {stage} is already pinned at the top of this conversation."
+            had = stage in c.pinned
+            c.pinned[stage] = self._card_text(stage, full=True)
+            c.full.add(stage)
             c.reads.append((c.turns, f"card {stage}"))
-            return f"The card for {stage} is now pinned at the top of this conversation. It stays there, so it is not repeated below."
+            return (f"The full card for {stage} now replaces its compact one at the top of this conversation. It stays there, so it is not repeated below."
+                    if had else f"The card for {stage} is now pinned at the top of this conversation. It stays there, so it is not repeated below.")
         if what == "board":
             groups = self.groups()
             c.board_seen.update(row["id"] for g in groups for row in g["rows"])

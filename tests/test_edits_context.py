@@ -5,7 +5,7 @@ import pytest
 
 from phost import ContractError
 from phost_agent.arena_text import Blocks, MAX_ACTIONS, parse_actions, render_board_delta
-from phost_agent.context import SLACK, Exchange, assemble, notebook_text, pinned_text, trim
+from phost_agent.context import OLD_RESULT, SLACK, Exchange, assemble, condense, notebook_text, pinned_text, trim
 from phost_agent.edits import apply_hunks, line_changes, parse_hunks
 
 SOURCE = "import numpy as np\n\nclass Runtime:\n    def solve(self, s):\n        x = 1\n        y = 2\n        return x + y\n"
@@ -107,6 +107,32 @@ def test_assemble_puts_the_pinned_text_first_and_keeps_roles_alternating():
     assert pinned_text({}) == ""
 
 
+CODE = "```python effective.solve\n" + "\n".join(f"line {i}" for i in range(20)) + "\n```"
+
+
+def test_the_newest_exchanges_are_sent_whole_and_older_ones_lose_long_results_and_code_but_keep_their_ids():
+    long = "Attempt a1b2c3: it failed.\n" + "x" * 3000
+    window = [Exchange(1, long, '{"action": "check"}\n' + CODE), Exchange(2, long, '{"action": "check"}\n' + CODE),
+              Exchange(3, long, '{"action": "check"}\n' + CODE), Exchange(4, long, '{"action": "check"}\n' + CODE)]
+    out = condense(window, whole=2, kept={1: [("attempt", "a1b2c3")], 2: [("attempt", "d4e5f6"), ("entry", "9a8b7c")]})
+    assert out[2:] == window[2:]                                              # the newest two are exactly as they were
+    for old in out[:2]:
+        assert len(old.user) < OLD_RESULT + 150 and old.user.startswith("Attempt a1b2c3: it failed.") and "look at its id again" in old.user
+        assert old.assistant.startswith('{"action": "check"}') and "line 7" not in old.assistant
+    assert "[python effective.solve: 20 lines of source, kept as attempt a1b2c3; look at it or build on it with base]" in out[0].assistant
+    assert "kept as attempt d4e5f6, entry 9a8b7c" in out[1].assistant
+    assert "not kept" in condense(window, whole=2)[0].assistant              # a turn whose source was never run has no id to name
+    assert window[0].user == long and "line 7" in window[0].assistant         # the originals are untouched: the window is built from them again
+
+
+def test_short_results_short_code_and_non_source_blocks_are_not_condensed():
+    short = Exchange(1, "Passed.", '```json\n{"action": "check"}\n```\n```python s\nx = 1\n```')
+    assert condense([short, Exchange(2, "u", "a")], whole=1) == [short, Exchange(2, "u", "a")]
+    assert condense([short], whole=0)[0] == short and condense([], whole=2) == []
+    many = [Exchange(i, "r" * 1000, "a") for i in range(1, 4)]
+    assert condense(many, whole=99) == many                                   # a large number sends everything whole
+
+
 # ---- the notebook -----------------------------------------------------------------------------------------------------------
 
 def attempt(i, turn, ok=True, note="", action="check"):
@@ -146,3 +172,14 @@ def test_the_delta_shows_only_new_rows_with_where_they_stand_and_marks_everythin
     text = render_board_delta([group(("e2", "beta", 5.0), ("e1", "alpha", 3.0), ("e3", "gamma", 1.5))], seen, you="alpha")
     assert "beta: speedup 5x" in text and "now 1 of 3 in exact on cpu" in text and "gamma" in text and "alpha" not in text
     assert seen == {"e1", "e2", "e3"} and render_board_delta([group(("e2", "beta", 5.0))], seen) == ""
+
+
+# ---- the measured facts, tidied ----------------------------------------------------------------------------------------------
+
+def test_tidy_shortens_a_librarys_internal_names_and_leaves_numpys_output_alone():
+    from phost_agent.facts import facts_block, tidy
+    warp = "  system.h: warp._src.types.array dtype=<class 'warp._src.types.float32'> shape=(2, 464, 464) strides=(861184, 1856, 4)"
+    assert tidy(warp) == "  system.h: warp.array dtype=float32 shape=(2, 464, 464) strides=(861184, 1856, 4)"
+    numpy = "  system.h: numpy.ndarray dtype=float32 shape=(2, 32, 32) strides=(4096, 128, 4) c_contiguous=True writeable=True"
+    assert tidy(numpy) == numpy and tidy(tidy(warp)) == tidy(warp)
+    assert "warp.array dtype=float32" in facts_block(warp) and "_src" not in facts_block(warp)

@@ -5,8 +5,9 @@ source the model had typed and every card it had read. That is most of what was 
 turn and the cost of a contest grew with the square of its length. The prompt is now built from parts that each have one job:
 
   pinned     the cards the contestant is working from, once, at the top; changes only when a card is added
-  window     the last few exchanges, word for word; trimmed in blocks so that the start of the prompt stays the same for several
-             turns in a row (a provider that caches the start of a prompt can serve it)
+  window     the last few exchanges, trimmed in blocks so that the start of the prompt stays the same for several turns in a row
+             (a provider that caches the start of a prompt can serve it); the newest two are whole, and in the older ones a long
+             result is cut and the code the contestant wrote is replaced by the id it is kept under (``condense``)
   notebook   one line for each earlier check and timed run that is no longer in the window: id, what, outcome, the contestant's
              own note, and the first line it printed; compiled from the arena's records, so nothing is asked of the model and
              nothing is lost: any id in it can be looked at or built on
@@ -17,6 +18,7 @@ Nothing here chooses what is tried. It decides what is repeated.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
@@ -24,6 +26,10 @@ from .arena_text import outcome_text, what_text
 
 SLACK = 3                  # exchanges kept beyond the window before it is trimmed back (so the prompt's start is stable for SLACK + 1 turns)
 NOTEBOOK_LINES = 24        # lines shown in full; older ones are listed by id
+WHOLE_TURNS = 2            # the newest exchanges sent as they were; older ones in the window are condensed
+OLD_RESULT = 600           # characters of an older result that are repeated (the start: what happened and why)
+CODE_LINES = 6             # a code block of at least this many lines is replaced in an older reply
+_FENCE = re.compile(r"```(python|py|edit)[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | re.I)
 
 
 @dataclass
@@ -38,6 +44,40 @@ class Exchange:
 def trim(exchanges: Sequence[Exchange], keep: int) -> list[Exchange]:
     """The window to keep: all of them until there are more than ``keep + SLACK``, then the newest ``keep``."""
     return list(exchanges) if len(exchanges) <= keep + SLACK else list(exchanges[-keep:])
+
+
+def condense(exchanges: Sequence[Exchange], *, whole: int = WHOLE_TURNS,
+             kept: Mapping[int, Sequence[tuple[str, str]]] | None = None) -> list[Exchange]:
+    """The window as it is sent: the newest ``whole`` exchanges as they were, the older ones shortened.
+
+    A result longer than ``OLD_RESULT`` characters is cut after that many (what a look returned or why a check failed was read when it
+    arrived; the id is still in its first line, so it can be looked at again). A python or edit block in an older reply is replaced by
+    the ids the arena kept that turn's source under (``kept``: turn to ``(kind, id)`` pairs), which can be looked at or built on.
+    Nothing is removed from the record: this is only what is repeated."""
+    kept = kept or {}
+    cut = max(0, len(exchanges) - max(whole, 0))
+    return [ex if i >= cut else Exchange(ex.turn, _cut_result(ex.user), _cut_code(ex.assistant, kept.get(ex.turn, ())))
+            for i, ex in enumerate(exchanges)]
+
+
+def _cut_result(text: str) -> str:
+    if len(text) <= OLD_RESULT:
+        return text
+    return (text[:OLD_RESULT].rstrip() + f"\n[{len(text) - OLD_RESULT} more characters of this result are not repeated here; "
+                                        f"look at its id again to read all of it]")
+
+
+def _cut_code(text: str, kept: Sequence[tuple[str, str]]) -> str:
+    where = ("kept as " + ", ".join(f"{kind} {ident}" for kind, ident in kept) + "; look at it or build on it with base") if kept else "not kept"
+
+    def one(match: re.Match) -> str:
+        lines = match.group(3).count("\n")
+        if lines < CODE_LINES:
+            return match.group(0)
+        tag = f" {match.group(2)}" if match.group(2) else ""
+        return f"[{match.group(1).lower()}{tag}: {lines} lines of source, {where}]"
+
+    return _FENCE.sub(one, text)
 
 
 def assemble(pinned: str, exchanges: Sequence[Exchange], newest: str) -> list[dict[str, str]]:

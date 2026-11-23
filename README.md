@@ -84,7 +84,7 @@ and the `tokens` it cost to produce.
 ## The arena
 
 ```
-phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--keep-turns 6] [--closed] [--dash]
+phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--keep-turns 6] [--whole-turns 2] [--preload 3] [--closed] [--dash]
 ```
 
 `--dash` also starts phost-dash on this machine's loopback over the same state (`$PHOST_HOME`), prints its link before the first turn
@@ -115,14 +115,20 @@ on the first's entry is a legitimate move, and is why the contest is open by def
 **What a turn sends.** The prompt is built from parts that each have one job (`context.py`), because sending the whole conversation again
 every turn is what made a contest's cost grow with the square of its length:
 
-- *Pinned*, at the top: the card (with the skeleton of a runtime) of each stage whose swap is ranked on speed, up to three, and any card
-  the contestant looks at; each once. Under a card, what a check hands a runtime on this scene, measured once by a probe the arena
+- *Pinned*, at the top: the card (with the skeleton of a runtime) of each stage whose swap is ranked on speed, the biggest shares of the
+  step first, up to `--preload` of them (default 3; 0 starts with none), and any card the contestant looks at; each once. A card that
+  starts pinned is *compact*: ports, invariants, what is gated, the implementations that exist; looking at the stage pins the full card in
+  its place (the implementations' parameters, every metric's definition, the typed law, the per-port comment in the skeleton). Each
+  card is sent on every call, so what it leaves out is what a contestant that never builds on an implementation never pays for. Under a card, what a check hands a runtime on this scene, measured once by a probe the arena
   writes from the card (`facts.py`): shapes, dtypes, layout, the host's facts, which libraries are installed in the sandbox. It runs
   through the same worker and sandbox as a contestant's code, its text is kept in the journal (kind `facts`), and a later contest on the
   same scene reads it instead. `--no-facts` skips it. It is information about the inputs and says nothing about what to do with them.
-- *Window*: the last `--keep-turns` turns (default 6) word for word, trimmed back in blocks of 3 rather than one a turn, so the start of
-  the prompt stays the same for several calls in a row where a provider caches it. Each past turn holds only what was said and the
-  result; the board and the feed are not copied into it.
+- *Window*: the last `--keep-turns` turns (default 6), trimmed back in blocks of 3 rather than one a turn, so the start of the prompt
+  stays the same for several calls in a row where a provider caches it. Each past turn holds only what was said and the result; the
+  board and the feed are not copied into it. The newest `--whole-turns` (default 2) are sent as they were. In the older ones a result
+  longer than 600 characters is cut there (its first line still names the id, so it can be looked at again) and a python or edit block
+  of six lines or more is replaced by the attempt and entry ids the arena kept that turn's source under, which can be looked at or built
+  on with `base`. Nothing is removed from the record; it is only not repeated. A large `--whole-turns` sends everything whole.
 - *Notebook*, from the arena's own records and not from a model: one line for each earlier check and timed run that is no longer in the
   window, with its id, what it replaced (and what it was edited from), how it came out, the contestant's own `note` and the first line it
   printed; its best entry; what it has read. Nothing is lost by it: any id can be looked at or built on.
@@ -161,6 +167,23 @@ Two things bound it: `--llm-option effort=low|medium|high|xhigh|max` (passed as 
 line says what is taking the time (the model, the checks, or a timed run that holds the device: a candidate that is 20x slower than
 the host takes minutes to time, with nothing printed until it is done). An earlier estimate here, that nearly all of the tokens in the
 first two contests were earlier turns sent again, added input and output together (the old journal kept only their sum) and was too high.
+
+**What was cut after that, and what it did.** A later 15-turn run with `haiku` (`effort=low`, `--tokens` budget reached) used 257k
+tokens, 17k a turn, and the journal's split showed where: the input at turn 15 was 20k tokens for 40k characters of messages, about
+2.3 characters a token, with 6.6k characters of system prompt, 10.8k of pinned cards, and 26.6k of window (six exchanges: the model's own
+code blocks and the results of `look`s at other entries' sources and failures). So the window was the largest part, the cards the
+second. Two changes, both measured on the same stored state and on a scripted contest: pinned cards start *compact* (the per-port
+comment in the skeleton, which repeated the ports table, and the judging sentence, the typed law, the implementations' parameters and
+the definitions of metrics that are not gated are left for a look at the stage, which pins the full card), 10.8k characters to 7.5k on
+that scene, with the measured shapes also shortened of a library's internal module paths at render time (`warp._src.types.array` is
+`warp.array`; the probe's stored text is unchanged, because measuring it again costs minutes: a check in the sandbox compiles its
+kernels each time); and the older turns in the window are condensed as above. On the scripted contest (two contestants, 5 000-character
+sources, characters over four, so indicative) 30 turns went from 281-294k tokens with everything whole to 157-165k, and 60 turns from
+0.63-0.66M (before the cards) to 350-367k; the last prompt from about 13.7k to 6.8k. The system prompt was tightened too, which saved
+about 250 characters of 6.6k: it is mostly rules and the action forms, which this does not remove. What none of this touches: the
+CLI's own 2.5k-token prefix, and the model's thinking, which is most of the output. And, again, a shorter, condensed window may cost a
+model something that a scripted contest cannot show: compare the best entry at equal turns with `--whole-turns 2` against
+`--whole-turns 99`.
 
 **What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
 class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate

@@ -137,7 +137,7 @@ def test_a_rival_can_read_an_entry_it_wants_to_build_on_unless_the_contest_is_cl
     assert "is now pinned at the top of this conversation" in card.pending or STAGE in card.pinned
     pinned = card.pinned[STAGE]
     assert "class Runtime:" in pinned and "def __init__(self, host, params)" in pinned     # the interface is a fact
-    assert "def solve(self, system)" in pinned and "#   rhs" in pinned
+    assert "def solve(self, system)" in pinned and "#   rhs" in pinned                       # a look pins the full card
 
 
 def test_an_entry_on_the_board_from_outside_the_contest_can_be_looked_at_too(tmp_path, registry):
@@ -470,20 +470,44 @@ def test_a_long_contest_sends_a_window_and_a_notebook_of_what_it_left_out(tmp_pa
     assert "Notebook" in model.calls[6]["messages"][-1]["content"]
 
 
-def test_the_stage_cards_that_are_ranked_start_pinned_and_a_card_that_is_looked_at_is_pinned_too(tmp_path, registry):
+def test_the_stage_cards_that_are_ranked_start_pinned_compact_and_a_card_that_is_looked_at_is_pinned_in_full(tmp_path, registry):
     model = Model(act(action="look", what="card", stage=STAGE), act(action="look", what="card", stage=OTHER),
                   act(action="look", what="card", stage=OTHER), act(action="look", what="board"))
     a = arena(tmp_path, registry, ("alpha", model), turns=4)
     a.run()
     start = model.calls[0]["messages"][0]["content"]
     assert start.startswith("Pinned for the whole contest") and "# stage effective.solve" in start and "# stage dof.passive_force" not in start
+    assert "(Compact card." in start and "#   rhs" not in start                                 # what it starts with is the compact one
     assert a.preloaded == [STAGE]
-    assert "already pinned" in model.calls[1]["messages"][-1]["content"]                       # it started pinned
+    assert "now replaces its compact one" in model.calls[1]["messages"][-1]["content"]          # looking at a pinned card makes it full
+    assert "(Compact card." not in model.calls[2]["messages"][0]["content"] and "#   rhs" in model.calls[2]["messages"][0]["content"]
     assert "is now pinned at the top" in model.calls[2]["messages"][-1]["content"]              # a card it asked for
     assert "already pinned" in model.calls[3]["messages"][-1]["content"]
     assert "# stage dof.passive_force" in model.calls[3]["messages"][0]["content"]              # ... and from then on it leads the prompt
     assert model.calls[3]["messages"][0]["content"].count("# stage effective.solve") == 1       # each card once
-    assert "last 6 turns word for word" in a.system and "pinned at the top" in a.system
+    assert "keeps your last 6 turns" in a.system and "pinned at the top" in a.system
+
+
+def test_preload_chooses_how_many_cards_a_contest_starts_with_and_zero_starts_with_none(tmp_path, registry):
+    none = Model(act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", none), turns=1, preload=0)
+    a.run()
+    assert a.preloaded == [] and "Pinned for the whole contest" not in none.calls[0]["messages"][0]["content"]
+    with pytest.raises(ValueError):
+        arena(tmp_path, registry, ("alpha", Model(act(action="look", what="board"))), preload=-1)
+
+
+def test_a_compact_card_is_much_shorter_and_keeps_what_every_candidate_needs(registry):
+    from phost_agent import render_card, stage_card
+    from phost_agent.cards import source_skeleton
+    card = stage_card(registry, STAGE)
+    full, compact = render_card(card), render_card(card, compact=True)
+    assert len(compact) < 0.8 * len(full)
+    for kept in ("| qacc | out |", "## invariants", "## ports", "must stay at or below"):
+        assert kept in compact
+    assert "## typed law" not in compact and all(f"`{i['id']}`" in compact for i in card["impls"])
+    assert "#   " in source_skeleton(card) and "#   " not in source_skeleton(card, list_ports=False)
+    assert "def solve(self, system)" in source_skeleton(card, list_ports=False)                  # the interface is still there
 
 
 # ---- building on an earlier source: fork and patch ---------------------------------------------------------------------------------
@@ -509,6 +533,30 @@ def test_an_earlier_attempt_can_be_built_on_with_an_edit_instead_of_retyping_the
     assert third["graph"]["stages"][STAGE]["source"] == second["graph"]["stages"][STAGE]["source"]   # a base with no edit runs as it was
     assert third["graph"]["stages"][STAGE]["edit"] == "+0/-0" and third["digest"] == second["digest"]
     assert "from " + first["id"] + " +1/-1" in a._what(second) and second["note"] == "banded"
+
+
+def test_older_turns_in_the_window_name_the_id_their_code_is_kept_under_and_that_id_still_works(tmp_path, registry):
+    graph = {"stages": {STAGE: {"entry": "Runtime"}}}
+    model = Dyn(act(action="check", graph=graph, note="dense", _blocks=SOURCE_REQUEST),
+                act(action="look", what="board"), act(action="look", what="board"), act(action="look", what="board"),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": a.attempts()[0]["id"]}}}, note="again"))
+    a = arena(tmp_path, registry, ("alpha", model), allow_unsandboxed=True, turns=5, whole_turns=2, keep_turns=6)
+    a.run()
+    first = a.attempts()[0]
+    last = model.calls[3]["messages"]                                         # turn 4: exchange 1 is older than the newest two
+    old_reply = last[1]["content"]
+    assert "def solve" not in old_reply and f"kept as attempt {first['id']}" in old_reply and old_reply.startswith('{"action": "check"')
+    assert first["id"] in last[2]["content"]                                  # the result that followed it still names the attempt
+    assert [r["graph"]["stages"][STAGE]["base"] for r in a.attempts()[1:]] == [first["id"]]       # and the id works as a base
+    (tmp_path / "whole").mkdir()
+    whole = arena(tmp_path / "whole", registry, ("alpha", Dyn(act(action="check", graph=graph, _blocks=SOURCE_REQUEST),
+                                                              act(action="look", what="board"), act(action="look", what="board"),
+                                                              act(action="look", what="board"))),
+                  allow_unsandboxed=True, turns=4, whole_turns=99, keep_turns=6)
+    whole.run()
+    assert "def solve" in whole.by_name["alpha"].exchanges[0].assistant
+    sent = [t["sent"]["chars"] for t in a.journal.records("arena") if t.get("phase") == "turn"]
+    assert sent[3] < [t["sent"]["chars"] for t in whole.journal.records("arena") if t.get("phase") == "turn"][3]
 
 
 def test_an_edit_that_does_not_apply_costs_a_turn_and_says_where_to_look(tmp_path, registry):

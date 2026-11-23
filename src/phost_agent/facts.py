@@ -10,6 +10,7 @@ scene reads it instead of measuring it again. It is information about the inputs
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Mapping
 
 LIBRARIES = ("numpy", "scipy", "numba", "jax", "torch", "warp", "cupy")
@@ -82,6 +83,17 @@ def facts_identity(scene: str, stage: str, skeleton: str) -> dict[str, str]:
     return dict(kind="facts", scene=scene, stage=stage, skeleton=hashlib.sha256(skeleton.encode()).hexdigest()[:16])
 
 
+_CLASS = re.compile(r"<class '(?:\w+\.)*(\w+)'>")                       # dtype=<class 'warp._src.types.float32'>  ->  dtype=float32
+_TYPE = re.compile(r"\b(\w+)(?:\.\w+)+\.(\w+)(?= dtype=)")                 # warp._src.types.array dtype=  ->  warp.array dtype=
+
+
+def tidy(output: str) -> str:
+    """The measured text with a library's internal module paths shortened: the same facts in fewer tokens, since it is sent every turn.
+
+    What the probe printed stays in the journal as it was; text that has no such paths (numpy's) is returned unchanged."""
+    return _TYPE.sub(r"\1.\2", _CLASS.sub(r"\1", output))
+
+
 def facts_block(output: str) -> str:
     return ("Measured on this scene at the real tier, by a runtime that printed what a check hands it and stopped (this is what yours "
-            "receives in a check; a timed run uses the world counts above):\n" + "\n".join("    " + line for line in output.splitlines()))
+            "receives in a check; a timed run uses the world counts above):\n" + "\n".join("    " + line for line in tidy(output).splitlines()))

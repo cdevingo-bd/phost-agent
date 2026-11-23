@@ -199,7 +199,7 @@ def cmd_arena(args) -> int:
     dash = _start_dash(args) if args.dash else None
     arena = Arena(task, contestants, journal=_journal(args), allow_unsandboxed=args.allow_unsandboxed, turns=args.turns,
                   submits=args.submits, tokens=args.tokens, open_code=not args.closed, feed_rows=args.feed,
-                  max_tokens=args.llm_max_tokens, keep_turns=args.keep_turns, runtime_facts=not args.no_facts, on_event=show)
+                  max_tokens=args.llm_max_tokens, keep_turns=args.keep_turns, runtime_facts=not args.no_facts, preload=args.preload, whole_turns=args.whole_turns, on_event=show)
     try:
         report = arena.run()
         print("\n" + arena.board_text())
@@ -327,8 +327,14 @@ def main(argv=None) -> int:
     p.add_argument("--tokens", type=int, default=None, help="tokens each contestant may spend (sent and received)")
     p.add_argument("--closed", action="store_true", help="the board shows scores only; contestants cannot read each other's entries")
     p.add_argument("--keep-turns", type=int, default=6,
-                   help="how many of its latest turns a contestant is sent word for word (the rest is the notebook; trimmed in blocks "
-                        "of 3, so 60 keeps everything)")
+                   help="how many of its latest turns a contestant is sent (the rest is the notebook; trimmed in blocks of 3, so 60 "
+                        "keeps everything); see --whole-turns for how much of each is sent")
+    p.add_argument("--whole-turns", type=int, default=2,
+                   help="of the turns kept, how many of the newest are sent whole; in older ones a long result is cut and the code "
+                        "is replaced by the id it is kept under (a large number sends everything whole)")
+    p.add_argument("--preload", type=int, default=3,
+                   help="how many stage cards (the biggest shares of the step, compact) every contestant starts with, 0 to 3 or more; "
+                        "each is sent on every turn, a card looked at is pinned in full")
     p.add_argument("--no-facts", action="store_true",
                    help="do not run the probe that measures what a check hands a runtime (shapes, dtypes, installed libraries)")
     p.add_argument("--feed", type=int, default=10, help="how many of the others' latest checks each turn shows (0: none; open contests only)")
