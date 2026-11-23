@@ -10,7 +10,10 @@ environment so it uses your login and not a key that would bill the API; ``--llm
 same Claude as the API, on whatever your login covers, and it counts against that plan's usage. Not ``--bare``: that mode ignores
 your login and wants a key.
 
-Options: ``binary`` (the executable, default ``claude``), ``timeout`` (seconds a call may take), ``keep_api_key``.
+Options: ``binary`` (the executable, default ``claude``), ``timeout`` (seconds a call may take), ``keep_api_key``, and ``effort``
+(``low``, ``medium``, ``high``, ``xhigh`` or ``max``, passed as ``claude --effort``: how much the model thinks before it answers, which is
+most of what a call costs; unset leaves the CLI's own default). ``--llm-max-tokens`` does not limit a call here: ``claude -p`` takes no
+output cap, so use ``effort`` and ``--tokens``.
 """
 
 from __future__ import annotations
@@ -32,8 +35,13 @@ _KEYS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
 class ClaudeCodeClient:
     name = "claude-code"
 
-    def __init__(self, model: str | None = None, *, binary: str = "claude", timeout: float = 600.0, keep_api_key: bool = False):
-        self.model, self.binary, self.timeout, self.keep_api_key = model or "default", binary, timeout, keep_api_key
+    EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+    def __init__(self, model: str | None = None, *, binary: str = "claude", timeout: float = 600.0, keep_api_key: bool = False,
+                 effort: str | None = None):
+        if effort is not None and effort not in self.EFFORTS:
+            raise ContractError(f"effort is one of {', '.join(self.EFFORTS)}, not {effort!r}")
+        self.model, self.binary, self.timeout, self.keep_api_key, self.effort = model or "default", binary, timeout, keep_api_key, effort
         self._request_model = model
         self._cwd = tempfile.mkdtemp(prefix="phost-agent-claude-")        # empty: nothing of the project is there to load
 
@@ -45,6 +53,8 @@ class ClaudeCodeClient:
                 "--no-session-persistence", "--system-prompt", system]
         if self._request_model:
             argv += ["--model", self._request_model]
+        if self.effort:
+            argv += ["--effort", self.effort]
         return argv
 
     def complete(self, system: str, messages: Sequence[Mapping[str, str]], *, max_tokens: int) -> Reply:
@@ -95,9 +105,11 @@ def _factory(model, options):
     binary = options.pop("binary", "claude")
     timeout = float(options.pop("timeout", 600.0))
     keep = options.pop("keep_api_key", "false").lower() in ("1", "true", "yes", "on")
+    effort = options.pop("effort", None)
     if options:
-        raise ContractError(f"unknown option(s) for the claude-code provider: {sorted(options)}; known: binary, timeout, keep_api_key")
-    return ClaudeCodeClient(model, binary=binary, timeout=timeout, keep_api_key=keep)
+        raise ContractError(f"unknown option(s) for the claude-code provider: {sorted(options)}; "
+                            "known: binary, timeout, keep_api_key, effort")
+    return ClaudeCodeClient(model, binary=binary, timeout=timeout, keep_api_key=keep, effort=effort)
 
 
 def register(add) -> None:

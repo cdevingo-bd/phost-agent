@@ -114,3 +114,13 @@ def test_the_provider_is_listed_and_takes_only_its_own_options():
     assert "claude-code" in {p.name for p in providers()}
     with pytest.raises(Exception, match="unknown option"):
         make_client("claude-code", {"temperature": "0"})
+
+
+def test_effort_is_passed_to_claude_when_set_and_left_out_when_not(fake):
+    client(fake).complete("s", [{"role": "user", "content": "u"}], max_tokens=10)
+    assert "--effort" not in fake.called()["argv"]
+    client(fake, effort="medium").complete("s", [{"role": "user", "content": "u"}], max_tokens=10)
+    argv = fake.called()["argv"]
+    assert argv[argv.index("--effort") + 1] == "medium"
+    with pytest.raises(Exception, match="effort is one of low, medium, high, xhigh, max, not 'huge'"):
+        make_client("claude-code", {"effort": "huge"})

@@ -150,6 +150,18 @@ delta state); 60 turns, 2.6-2.7M before, 0.63-0.66M after; the last turn's promp
 nothing about what real models do with a shorter window, so **whether it costs them any speedup is not measured**. Compare the best
 entry at equal turns with `--keep-turns 6` against `--keep-turns 60`.
 
+**Where the tokens go, measured.** The first run with this prompt on another scene (`trampoline14:discrete`, two models through
+`claude-code`, 12 turns, read from the journal's per-turn split): 214k input tokens and 128k output tokens. Input was small and grew by
+about 2k a turn (7.5k at turn 1, about 30k at turn 6). Output was 1.2k to 24k a turn, and a turn that only looked at two things
+emitted 16k, so it is the model thinking and not code it writes. Nothing here limits that: `claude -p` takes no output cap (so
+`--llm-max-tokens` does nothing for `claude-code`), and what it reports as served from the provider's cache stayed at 2 511 tokens, which
+is the CLI's own prefix, so none of this prompt was cached. The window and the notebook cut the input; the output is the model's own.
+Two things bound it: `--llm-option effort=low|medium|high|xhigh|max` (passed as `claude --effort`; unset leaves the CLI's default), and
+`--tokens N` (input and output per contestant, checked before each turn). Each turn's line prints its input, output and seconds, and a
+line says what is taking the time (the model, the checks, or a timed run that holds the device: a candidate that is 20x slower than
+the host takes minutes to time, with nothing printed until it is done). An earlier estimate here, that nearly all of the tokens in the
+first two contests were earlier turns sent again, added input and output together (the old journal kept only their sum) and was too high.
+
 **What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
 class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate
 one; a model-changing entry only against entries replacing the same stages). The board a contestant sees is for the largest world

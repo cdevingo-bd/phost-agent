@@ -625,3 +625,18 @@ def test_a_call_that_does_not_go_through_loses_neither_the_last_result_nor_what_
     assert "Your last reply did not go through (rate limited)" in retry
     assert "Board for" in retry                                               # the result of its last turn is still there
     assert "New on the board since your last move" in retry and "beta: speedup" in retry     # and beta's entry was not used up
+
+
+def test_the_arena_says_what_is_taking_the_time_and_what_each_turn_cost(tmp_path, registry):
+    events = []
+    graph = {"stages": {STAGE: {"impl": FAST, "params": {"gain": 1}}}}
+    reply = Reply(json.dumps(dict(actions=[dict(action="check", graph=graph), dict(action="submit", graph=graph, note="n")])), 1200, 340, 200)
+    a = arena(tmp_path, registry, ("alpha", Model(reply)), turns=1, on_event=events.append)
+    a.run()
+    kinds = [(e["event"], e.get("what", "")[:24]) for e in events if e["event"] in ("work", "turn")]
+    assert kinds == [("work", "asking m"), ("work", "running the checks"), ("work", "running the checks"),
+                     ("work", "timed run at 1, 2 worlds"), ("turn", "")]
+    turn = next(e for e in events if e["event"] == "turn")
+    assert (turn["input_tokens"], turn["output_tokens"], turn["cached_tokens"]) == (1200, 340, 200)
+    assert turn["seconds"] >= turn["model_seconds"] >= 0
+    assert [e["turn"] for e in events if e["event"] == "work"] == [1, 1, 1, 1]

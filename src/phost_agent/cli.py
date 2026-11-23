@@ -188,7 +188,11 @@ def cmd_arena(args) -> int:
     def show(event):
         if event["event"] == "turn":
             first = " ".join(event["text"].split())[:110]
-            print(f"[{event['contestant']}] turn {event['turn']:<3} {event['action']:<10} {first}")
+            cost = (f"{event['input_tokens']:>6} in {event['output_tokens']:>6} out {event['seconds']:>4.0f} s "
+                    if "input_tokens" in event else "")
+            print(f"[{event['contestant']}] turn {event['turn']:<3} {event['action']:<14} {cost}{first}")
+        elif event["event"] == "work":
+            print(f"[{event['contestant']}] turn {event['turn']:<3} ...            {event['what']}")
         elif event["event"] == "left":
             print(f"[{event['contestant']}] leaves: {event['why']}")
     contestants = _contestants(args)                       # refuse a bad provider before opening anything

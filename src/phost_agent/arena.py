@@ -335,6 +335,7 @@ class Arena:
         if self.tokens is not None and c.tokens >= self.tokens:
             return self._leave(c, "tokens")
         c.turns += 1
+        began = time.monotonic()
         window = trim(c.exchanges, self.keep_turns)
         shown = (set(c.board_seen), set(c.fed), c.seen)          # what it has been shown, to put back if the call does not go through
         notebook = self._notebook(c, window[0].turn if window else None)
@@ -342,6 +343,8 @@ class Arena:
         pinned = pinned_text(c.pinned)
         messages = assemble(pinned, window, c.pending + "\n\n" + state)
         messages = [dict(role=m["role"], content=redact(m["content"])) for m in messages]      # everything sent, every time
+        self._working(c, f"asking {c.client.model}")
+        asked = time.monotonic()
         try:
             reply = c.client.complete(self.system, messages, max_tokens=self.max_tokens)
         except LLMFatal as error:
@@ -350,6 +353,7 @@ class Arena:
             c.board_seen, c.fed, c.seen = shown                  # it was not shown this, so the next turn shows it
             c.pending = f"Your last reply did not go through ({error}). Try again.\n\n{c.pending}"
             return self.emit(dict(event="turn", contestant=c.name, turn=c.turns, action="(no reply)", text=str(error)))
+        model_seconds = time.monotonic() - asked
         c.tokens += reply.tokens
         c.tokens_in, c.tokens_out, c.tokens_cached = c.tokens_in + reply.input_tokens, c.tokens_out + reply.output_tokens, c.tokens_cached + reply.cached_tokens
         if reply.stop == "length":
@@ -365,7 +369,13 @@ class Arena:
                             estimated=reply.estimated, contest=self.contest,
                             sent=dict(messages=len(messages), exchanges=len(window), chars=sum(len(m["content"]) for m in messages),
                                       system=len(self.system), pinned=len(pinned), notebook=len(notebook), state=len(state)))
-        self.emit(dict(event="turn", contestant=c.name, turn=c.turns, action=action, text=text))
+        self.emit(dict(event="turn", contestant=c.name, turn=c.turns, action=action, text=text, input_tokens=reply.input_tokens,
+                       output_tokens=reply.output_tokens, cached_tokens=reply.cached_tokens, seconds=time.monotonic() - began,
+                       model_seconds=model_seconds))
+
+    def _working(self, c: Contestant, what: str) -> None:
+        """Say what is taking the time: a model call, a check, or a timed run that holds the device."""
+        self.emit(dict(event="work", contestant=c.name, turn=c.turns, what=what))
 
     def _notebook(self, c: Contestant, before: int | None) -> str:
         """The contestant's own checks and timed runs older than its window, compiled from the journal."""
@@ -572,6 +582,7 @@ class Arena:
         return lines, ok
 
     def _check(self, c: Contestant, graph: Mapping[str, Proposal], note: str = "") -> str:
+        self._working(c, "running the checks")
         prepared = self._prepare_all(graph)
         lines, ok = self._check_lines(prepared)
         again = self._post(c, "check", graph, prepared, ok, note)
@@ -581,6 +592,7 @@ class Arena:
     def _submit(self, c: Contestant, graph: Mapping[str, Proposal], note: str) -> str:
         if c.submits >= self.submits:
             return "You have no timed runs left."
+        self._working(c, "running the checks")
         prepared = self._prepare_all(graph)
         lines, ok = self._check_lines(prepared)
         if not ok:
@@ -592,6 +604,7 @@ class Arena:
                          stages={s: Node(p.proposal.impl_id, dict(p.params)) for s, p in prepared.items()},
                          plugins=tuple(x.module for x in candidates), note=f"entered by {c.name}")
         c.submits += 1
+        self._working(c, f"timed run at {', '.join(map(str, self.task.worlds))} worlds: it holds the device and can take minutes")
         with self.lease.hold(f"run {c.name}", timeout=self.task.run_timeout) as held:
             result = self.timed(spec, self.probe, candidates[0] if candidates else None)
         c.device_seconds += held.seconds
