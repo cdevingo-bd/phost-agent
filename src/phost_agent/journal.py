@@ -25,7 +25,7 @@ from phost_score.entry import json_safe
 
 from .paths import default_journal
 
-KINDS = ("task", "ceiling", "tier", "attempt", "arena", "submission")
+KINDS = ("task", "ceiling", "tier", "attempt", "arena", "submission", "facts")
 
 
 class Journal:

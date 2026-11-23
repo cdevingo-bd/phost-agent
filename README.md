@@ -84,7 +84,7 @@ and the `tokens` it cost to produce.
 ## The arena
 
 ```
-phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--closed] [--dash]
+phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--keep-turns 6] [--closed] [--dash]
 ```
 
 `--dash` also starts phost-dash on this machine's loopback over the same state (`$PHOST_HOME`), prints its link before the first turn
@@ -101,7 +101,8 @@ told:** what to try, in what order, or how to search. There is no coaching in th
 
 **What it can do:** `look` at a stage's card or at any entry on the board (a rival's: graph, parameters, source, while the contest is open, unless `--closed`;
 one recorded outside the contest, such as a person's or an earlier run's: graph and parameters, since the ledger does not keep source);
-`check` a graph (the contract checks only); `submit` one (check, time, rank, and be told where it landed). There is no way to leave: a
+`check` a graph (the contract checks only, with an optional `note` that goes in its notebook); `submit` one (check, time, rank, and be
+told where it landed). There is no way to leave: a
 contestant plays until its turns, its timed runs or its tokens are spent, or until a failure that cannot be retried (no key, an unknown
 model) removes it. In an open contest every `check` anyone runs is posted, passed or failed, with who ran it and the reason it failed: each
 turn shows the others' latest ten (`--feed N`, 0 for none) as one line each, and `look` with `"what": "attempt"` and an id gives the
@@ -110,6 +111,44 @@ and shows nothing; the checks are still in the journal. Whatever a runtime `prin
 passed or failed (the first 4000 characters, identical lines in a row folded), and is posted with the check; see below. A graph replaces any
 set of stages, each with a registered implementation and parameters or with the source of a runtime class. A second model that builds
 on the first's entry is a legitimate move, and is why the contest is open by default.
+
+**What a turn sends.** The prompt is built from parts that each have one job (`context.py`), because sending the whole conversation again
+every turn is what made a contest's cost grow with the square of its length:
+
+- *Pinned*, at the top: the card (with the skeleton of a runtime) of each stage whose swap is ranked on speed, up to three, and any card
+  the contestant looks at; each once. Under a card, what a check hands a runtime on this scene, measured once by a probe the arena
+  writes from the card (`facts.py`): shapes, dtypes, layout, the host's facts, which libraries are installed in the sandbox. It runs
+  through the same worker and sandbox as a contestant's code, its text is kept in the journal (kind `facts`), and a later contest on the
+  same scene reads it instead. `--no-facts` skips it. It is information about the inputs and says nothing about what to do with them.
+- *Window*: the last `--keep-turns` turns (default 6) word for word, trimmed back in blocks of 3 rather than one a turn, so the start of
+  the prompt stays the same for several calls in a row where a provider caches it. Each past turn holds only what was said and the
+  result; the board and the feed are not copied into it.
+- *Notebook*, from the arena's own records and not from a model: one line for each earlier check and timed run that is no longer in the
+  window, with its id, what it replaced (and what it was edited from), how it came out, the contestant's own `note` and the first line it
+  printed; its best entry; what it has read. Nothing is lost by it: any id can be looked at or built on.
+- *State*, in the newest message only: what is new on the board (a row not yet shown, and where it stands) and in the others' checks
+  since the contestant last looked. `look` with `"what": "board"` gives the whole board.
+
+**Building on an earlier source.** A graph node can be `{"base": "<attempt or entry id>"}`: the source of that attempt or entry (yours,
+or anyone's while the contest is open), run as it was or edited by an `edit` block of SEARCH/REPLACE hunks (`edits.py`; each SEARCH
+must match one place, and a refusal says where the nearest text is). A fork of a rival's entry costs the edit, not the reading and the
+retyping. The result of a check names its attempt id and the result of a timed run its entry ids.
+
+**Several actions in a turn.** `{"actions": [...]}` holds up to 6 look, check and submit actions, run in order, each answered under its
+own header; a failing one does not stop the others. A turn is one call to the model and counts once against the turns however many
+actions it holds, so checking three variants costs one prompt, not three. With several actions a stage's python and edit blocks are used
+in the order the actions come.
+
+**What a turn cost.** Each `turn` record in the journal has the input, output and cached tokens the provider reported, whether they were
+estimated, and the size in characters of each part of what was sent (`sent`: system, pinned, notebook, state, and the messages kept).
+The end of a run prints the split per contestant.
+
+Measured on a scripted contest, the same moves through the previous commit and this one (two contestants, 5 000-character sources,
+`tests`-style fakes for the check and the timed run; characters over four, so the numbers are indicative): 30 turns, 0.68-0.72M tokens
+before, 0.29-0.30M after (`--keep-turns 6`), 0.52-0.55M with nothing trimmed (`--keep-turns 60`, which isolates pinning and the
+delta state); 60 turns, 2.6-2.7M before, 0.63-0.66M after; the last turn's prompt 70k before, 12k after. A scripted contest says
+nothing about what real models do with a shorter window, so **whether it costs them any speedup is not measured**. Compare the best
+entry at equal turns with `--keep-turns 6` against `--keep-turns 60`.
 
 **What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
 class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate

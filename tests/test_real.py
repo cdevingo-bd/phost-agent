@@ -174,3 +174,21 @@ def test_what_a_candidate_printed_comes_back_when_the_check_fails_or_the_code_ra
 def test_a_candidate_that_prints_nothing_returns_no_output(tmp_path):
     req, cand = source_request(GOOD_SOLVER, "cheap", tmp_path)
     assert run_check(req, untrusted=True, allow_unsandboxed=True, candidate_dir=cand.directory).output == ""
+
+
+# ---- what a check's inputs are, measured by a probe the arena writes ----------------------------------------------------------------
+
+@pytest.mark.parametrize("scene", ["chain32:pluck", "chain256:ringing"])
+def test_a_probe_written_from_the_card_prints_what_a_check_hands_a_runtime_and_stops(tmp_path, journal, scene):
+    from phost_agent.cards import stage_card
+    from phost_agent.facts import probe_source
+    card = stage_card(load_registry(), STAGE)
+    funnel = Funnel(Task(scene=scene, stage=STAGE, worlds=(1,), steps=5, launches=2, repeats=3), journal,
+                    lease=Lease("cpu", tmp_path / "leases"), allow_unsandboxed=True, candidates_dir=tmp_path / "cand")
+    result = funnel.diagnose(Proposal(STAGE, source=probe_source(card)), "real")
+    assert result.status == "error" and "probe: stopped on purpose" in result.reason
+    out = result.output
+    assert "host.facts(): ModelFacts(" in out and "installed: numpy=yes" in out and "cpus available" in out
+    for port in card["ports"]:
+        assert f"system.{port['name']}: " in out
+    assert "dtype=float" in out and "shape=(" in out and "c_contiguous=" in out

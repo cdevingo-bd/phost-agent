@@ -195,13 +195,15 @@ def cmd_arena(args) -> int:
     dash = _start_dash(args) if args.dash else None
     arena = Arena(task, contestants, journal=_journal(args), allow_unsandboxed=args.allow_unsandboxed, turns=args.turns,
                   submits=args.submits, tokens=args.tokens, open_code=not args.closed, feed_rows=args.feed,
-                  max_tokens=args.llm_max_tokens, on_event=show)
+                  max_tokens=args.llm_max_tokens, keep_turns=args.keep_turns, runtime_facts=not args.no_facts, on_event=show)
     try:
         report = arena.run()
         print("\n" + arena.board_text())
         for c in report.contestants:
             best = f"{c['best']['speedup']:.3f}x ({c['best']['klass']})" if c["best"] else "no ranked entry"
-            print(f"{c['name']}: {best}; {c['turns']} turns, {c['submits']} timed runs, {c['tokens']} tokens, left: {c['left']}")
+            cached = f" ({c['cached_tokens']} from the provider's cache)" if c.get("cached_tokens") else ""
+            print(f"{c['name']}: {best}; {c['turns']} turns, {c['submits']} timed runs, {c['tokens']} tokens "
+                  f"(input {c['input_tokens']}{cached}, output {c['output_tokens']}), left: {c['left']}")
         if args.out:
             Path(args.out).write_text(json.dumps(report.to_dict(), indent=2))
         if dash is not None:
@@ -320,6 +322,11 @@ def main(argv=None) -> int:
     p.add_argument("--submits", type=int, default=6, help="timed runs each contestant may use (the scarce thing)")
     p.add_argument("--tokens", type=int, default=None, help="tokens each contestant may spend (sent and received)")
     p.add_argument("--closed", action="store_true", help="the board shows scores only; contestants cannot read each other's entries")
+    p.add_argument("--keep-turns", type=int, default=6,
+                   help="how many of its latest turns a contestant is sent word for word (the rest is the notebook; trimmed in blocks "
+                        "of 3, so 60 keeps everything)")
+    p.add_argument("--no-facts", action="store_true",
+                   help="do not run the probe that measures what a check hands a runtime (shapes, dtypes, installed libraries)")
     p.add_argument("--feed", type=int, default=10, help="how many of the others' latest checks each turn shows (0: none; open contests only)")
     p.add_argument("--llm-option", action="append", default=[], metavar="KEY=VALUE", help="a provider option, applied to every contestant")
     p.add_argument("--llm-max-tokens", type=int, default=16000)

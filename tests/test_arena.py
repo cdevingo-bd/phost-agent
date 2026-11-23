@@ -71,6 +71,7 @@ def arena(tmp_path, registry, *models, check=None, timed=None, **kwargs):
 
     kwargs.setdefault("turns", 10)
     kwargs.setdefault("submits", 3)
+    kwargs.setdefault("runtime_facts", False)           # no probe runs unless a test is about it
     a = Arena(ArenaTask(SCENE, worlds=(1, 2), steps=5, launches=2, repeats=3), contestants, journal=Journal(tmp_path / "journal.jsonl"),
               ledger=Ledger(tmp_path / "ledger.jsonl"), lease=Lease("cpu", tmp_path / "leases"), registry=registry,
               measure=lambda t, w: REPORT, check=check or default_check, timed=timed or default_timed,
@@ -133,9 +134,10 @@ def test_a_rival_can_read_an_entry_it_wants_to_build_on_unless_the_contest_is_cl
     arena(tmp_path, registry, ("delta", closed), open_code=False).run()
     assert "this contest is closed" in closed.calls[1]["messages"][-1]["content"]
     card = a.by_name["beta"]
-    seen_card = [str(m["content"]) for m in card.messages + [{"content": card.pending}] if "# stage effective.solve" in str(m["content"])]
-    assert seen_card and "class Runtime:" in seen_card[0] and "def __init__(self, host, params)" in seen_card[0]   # the interface is a fact
-    assert "def solve(self, system)" in seen_card[0] and "#   rhs" in seen_card[0]
+    assert "is now pinned at the top of this conversation" in card.pending or STAGE in card.pinned
+    pinned = card.pinned[STAGE]
+    assert "class Runtime:" in pinned and "def __init__(self, host, params)" in pinned     # the interface is a fact
+    assert "def solve(self, system)" in pinned and "#   rhs" in pinned
 
 
 def test_an_entry_on_the_board_from_outside_the_contest_can_be_looked_at_too(tmp_path, registry):
@@ -184,10 +186,10 @@ def test_every_check_is_posted_for_the_others_who_ran_it_whether_it_passed_and_w
     a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), check=failing_check, turns=3)
     a.run()
     seen_by_beta = beta.calls[0]["messages"][-1]["content"]                        # beta moves second: alpha's check is already up
-    assert "Recent checks by the others" in seen_by_beta and "alpha turn 1" in seen_by_beta
+    assert "New checks by the others" in seen_by_beta and "alpha turn 1" in seen_by_beta
     assert f"{STAGE} ({FAST})" in seen_by_beta and "FAILED at the" in seen_by_beta and "residual too big" in seen_by_beta
     seen_by_alpha = alpha.calls[1]["messages"][-1]["content"]
-    feed = seen_by_alpha.split("Recent checks by the others")[1]
+    feed = seen_by_alpha.split("New checks by the others")[1]
     assert "beta turn 1" in feed and "passed the checks" in feed and "alpha turn" not in feed       # not your own: you have those
     again = alpha.calls[2]["messages"][-1]["content"]
     assert "This exact graph was already checked by you on turn 1 (attempt " in again and "FAILED at the" in again
@@ -401,3 +403,225 @@ def test_a_failing_check_that_printed_keeps_the_reason_and_the_output(tmp_path, 
     [attempt] = a.attempts()
     assert attempt["output"] == [dict(stage=STAGE, tier="cheap", text="W=2")] and not attempt["ok"]
     assert "residual too big" in attempt["reasons"][0]["reason"]
+
+
+# ---- state is shown once, history is a window, the rest is a notebook -------------------------------------------------------------
+
+import re
+
+
+class Dyn(Model):
+    """A model whose answers may be functions of what it was sent, for a move that names an id it was told."""
+
+    def complete(self, system, messages, *, max_tokens):
+        self.calls.append(dict(system=system, messages=[dict(m) for m in messages]))
+        answer = self.answers.pop(0) if self.answers else act(action="look", what="board")
+        return answer(messages) if callable(answer) else answer
+
+
+def attempt_id(messages):
+    return re.findall(r"This is attempt ([0-9a-f]{8})", messages[-1]["content"])[-1]
+
+
+def test_the_board_and_the_feed_are_shown_once_and_never_copied_into_the_history(tmp_path, registry):
+    alpha = Model(act(action="check", graph=FAILING), act(action="check", graph=PASSING), act(action="look", what="board"))
+    beta = Model(act(action="check", graph=PASSING))
+    a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), check=failing_check, turns=3)
+    a.run()
+    first = alpha.calls[0]["messages"][-1]["content"]
+    assert "Board for" in first and "no entries yet" in first
+    second = alpha.calls[1]["messages"][-1]["content"]
+    assert "New checks by the others" in second and "beta turn 1" in second                  # beta's check, new to alpha
+    third = alpha.calls[2]["messages"]
+    assert "beta turn 1" not in third[-1]["content"] and "(the board has not changed)" in third[-1]["content"]
+    assert not any("New checks by the others" in m["content"] or "Board for" in m["content"] for m in third[:-1])
+
+
+def test_a_new_entry_arrives_as_a_delta_and_the_whole_board_is_there_for_the_asking(tmp_path, registry):
+    alpha = Model(act(action="look", what="board"), act(action="look", what="board"), act(action="look", what="board"))
+    beta = Model(submit(1, "plain gain"))
+    a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), turns=3)
+    a.run()
+    assert "Board for" in alpha.calls[0]["messages"][-1]["content"]
+    second = alpha.calls[1]["messages"][-1]["content"]
+    assert "New on the board since your last move" in second and "beta: speedup" in second and "now 1 of 1" in second
+    assert "Board for" in second                                                           # the whole board, because alpha asked
+    assert "(the board has not changed)" in alpha.calls[2]["messages"][-1]["content"]
+
+
+def test_a_long_contest_sends_a_window_and_a_notebook_of_what_it_left_out(tmp_path, registry):
+    answers = [act(action="check", graph=FAILING, note="the plain gain first"), act(action="check", graph=PASSING, note="then the law")]
+    answers += [act(action="look", what="board")] * 5
+    model = Model(*answers)
+    a = arena(tmp_path, registry, ("alpha", model), check=failing_check, turns=7, keep_turns=1)
+    a.run()
+    early = model.calls[3]["messages"]                                                    # turn 4: all of it is still in the window
+    assert len(early) == 7 and "Notebook" not in early[-1]["content"]
+    late = model.calls[5]["messages"]                                                     # turn 6: more than keep + 3 went by, so one is kept
+    assert len(late) == 3 and len(model.calls[6]["messages"]) == 5                        # and the window grows again until the next trim
+    newest = late[-1]["content"]
+    first, second = a.attempts()[:2]
+    assert "Notebook (your own earlier work" in newest
+    assert f"- {first['id']} turn 1 check" in newest and "note: the plain gain first" in newest and "FAILED at the cheap tier" in newest
+    assert f"- {second['id']} turn 2 check" in newest and "note: then the law" in newest and "passed the checks" in newest
+    assert "Notebook" not in late[0]["content"] and not any(first["id"] in m["content"] for m in late[:-1])
+    journal_turns = [r for r in a.journal.records("arena") if r.get("phase") == "turn"]
+    assert [t["sent"]["exchanges"] for t in journal_turns] == [0, 1, 2, 3, 4, 1, 2]
+    assert "Notebook" in model.calls[6]["messages"][-1]["content"]
+
+
+def test_the_stage_cards_that_are_ranked_start_pinned_and_a_card_that_is_looked_at_is_pinned_too(tmp_path, registry):
+    model = Model(act(action="look", what="card", stage=STAGE), act(action="look", what="card", stage=OTHER),
+                  act(action="look", what="card", stage=OTHER), act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", model), turns=4)
+    a.run()
+    start = model.calls[0]["messages"][0]["content"]
+    assert start.startswith("Pinned for the whole contest") and "# stage effective.solve" in start and "# stage dof.passive_force" not in start
+    assert a.preloaded == [STAGE]
+    assert "already pinned" in model.calls[1]["messages"][-1]["content"]                       # it started pinned
+    assert "is now pinned at the top" in model.calls[2]["messages"][-1]["content"]              # a card it asked for
+    assert "already pinned" in model.calls[3]["messages"][-1]["content"]
+    assert "# stage dof.passive_force" in model.calls[3]["messages"][0]["content"]              # ... and from then on it leads the prompt
+    assert model.calls[3]["messages"][0]["content"].count("# stage effective.solve") == 1       # each card once
+    assert "last 6 turns word for word" in a.system and "pinned at the top" in a.system
+
+
+# ---- building on an earlier source: fork and patch ---------------------------------------------------------------------------------
+
+SOURCE_REQUEST = f"\n```python {STAGE}\n{GOOD_SOLVER}\n```"
+DOCSTRING = '"""A float64 dense solve of the effective system."""'
+
+
+def edit_block(old, new, stage=STAGE):
+    return f"\n```edit {stage}\n<<<<<<< SEARCH\n{old}\n=======\n{new}\n>>>>>>> REPLACE\n```"
+
+
+def test_an_earlier_attempt_can_be_built_on_with_an_edit_instead_of_retyping_the_source(tmp_path, registry):
+    model = Dyn(act(action="check", graph={"stages": {STAGE: {"entry": "Runtime"}}}, note="dense", _blocks=SOURCE_REQUEST),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": attempt_id(m)}}}, note="banded",
+                              _blocks=edit_block(DOCSTRING, '"""A banded solve."""')),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": attempt_id(m)}}}))
+    a = arena(tmp_path, registry, ("alpha", model), allow_unsandboxed=True, turns=3)
+    a.run()
+    first, second, third = a.attempts()
+    assert '"""A banded solve."""' in second["graph"]["stages"][STAGE]["source"] and DOCSTRING not in second["graph"]["stages"][STAGE]["source"]
+    assert second["graph"]["stages"][STAGE]["base"] == first["id"] and second["graph"]["stages"][STAGE]["edit"] == "+1/-1"
+    assert third["graph"]["stages"][STAGE]["source"] == second["graph"]["stages"][STAGE]["source"]   # a base with no edit runs as it was
+    assert third["graph"]["stages"][STAGE]["edit"] == "+0/-0" and third["digest"] == second["digest"]
+    assert "from " + first["id"] + " +1/-1" in a._what(second) and second["note"] == "banded"
+
+
+def test_an_edit_that_does_not_apply_costs_a_turn_and_says_where_to_look(tmp_path, registry):
+    model = Dyn(act(action="check", graph={"stages": {STAGE: {"entry": "Runtime"}}}, _blocks=SOURCE_REQUEST),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": attempt_id(m)}}}, _blocks=edit_block("def solve(self, q):", "x")),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": "deadbeef"}}}))
+    a = arena(tmp_path, registry, ("alpha", model), allow_unsandboxed=True, turns=3)
+    a.run()
+    assert len(a.attempts()) == 1
+    assert "Not accepted: effective.solve: the edit to " in model.calls[2]["messages"][-1]["content"]
+    assert "matches nowhere" in model.calls[2]["messages"][-1]["content"] and "nearest line is" in model.calls[2]["messages"][-1]["content"]
+    assert "no attempt or entry 'deadbeef' is recorded" in a.by_name["alpha"].pending
+
+
+def test_a_rivals_entry_can_be_forked_by_its_id_and_a_closed_contest_keeps_the_rivals_source_to_itself(tmp_path, registry):
+    graph = {"stages": {STAGE: {"entry": "Runtime"}}}
+    holder = {}
+    alpha = Dyn(act(action="submit", graph=graph, note="dense", _blocks=SOURCE_REQUEST))
+    a = arena(tmp_path, registry, ("alpha", alpha), allow_unsandboxed=True, turns=1)
+    a.run()
+    assert "Your entries: " in a.by_name["alpha"].pending and "build on it with base" in a.by_name["alpha"].pending
+    holder["entry"] = next(r["id"] for g in a.groups() for r in g["rows"])
+    beta2 = Dyn(act(action="check", graph={"stages": {STAGE: {"base": holder["entry"]}}}, _blocks=edit_block(DOCSTRING, '"""Mine."""')))
+    a2 = arena(tmp_path, registry, ("beta", beta2), allow_unsandboxed=True, turns=1)
+    a2.run()
+    forked = [r for r in a2.attempts() if r["contestant"] == "beta"][-1]
+    assert forked["graph"]["stages"][STAGE]["base"] == holder["entry"] and '"""Mine."""' in forked["graph"]["stages"][STAGE]["source"]
+    closed = Dyn(act(action="check", graph={"stages": {STAGE: {"base": holder["entry"]}}}))
+    a3 = arena(tmp_path, registry, ("gamma", closed), allow_unsandboxed=True, turns=1, open_code=False)
+    a3.run()
+    assert "this contest is closed: you can build on your own attempts and entries only" in a3.by_name["gamma"].pending
+
+
+def test_a_base_with_no_source_for_the_stage_says_what_it_does_have(tmp_path, registry):
+    model = Dyn(act(action="check", graph=FAILING),
+                lambda m: act(action="check", graph={"stages": {STAGE: {"base": attempt_id(m)}}}))
+    a = arena(tmp_path, registry, ("alpha", model), turns=2)
+    a.run()
+    assert f"has no source for {STAGE} (it replaced no stage with source)" in a.by_name["alpha"].pending
+
+
+# ---- several actions in one turn ---------------------------------------------------------------------------------------------------
+
+def test_a_turn_can_hold_several_actions_and_counts_once_against_the_turns(tmp_path, registry):
+    graph = {"stages": {STAGE: {"entry": "Runtime"}}}
+    other = GOOD_SOLVER.replace(DOCSTRING, '"""Another."""')
+    reply = Reply(json.dumps(dict(actions=[dict(action="look", what="board"), dict(action="check", graph=graph, note="one"),
+                                           dict(action="check", graph=graph, note="two")]))
+                  + f"\n```python {STAGE}\n{GOOD_SOLVER}\n```\n```python {STAGE}\n{other}\n```", 100, 20)
+    model = Model(reply, act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", model), allow_unsandboxed=True, turns=2)
+    a.run()
+    one, two = a.attempts()
+    assert one["turn"] == two["turn"] == 1 and one["digest"] != two["digest"] and (one["note"], two["note"]) == ("one", "two")
+    assert GOOD_SOLVER.strip() in one["graph"]["stages"][STAGE]["source"] and "Another." in two["graph"]["stages"][STAGE]["source"]
+    told = model.calls[1]["messages"][-1]["content"]
+    assert "[1 of 3] look" in told and "[2 of 3] check" in told and "[3 of 3] check" in told and told.count("This is attempt") == 2
+    turns = [r for r in a.journal.records("arena") if r.get("phase") == "turn"]
+    assert turns[0]["action"] == "look+check+check" and a.by_name["alpha"].turns == 2
+
+
+def test_one_failing_action_does_not_stop_the_others_and_extra_actions_are_not_run(tmp_path, registry):
+    reply = Reply(json.dumps(dict(actions=[dict(action="look", what="nothing")] + [dict(action="look", what="board")] * 7)), 100, 20)
+    model = Model(reply)
+    a = arena(tmp_path, registry, ("alpha", model), turns=1)
+    a.run()
+    told = a.by_name["alpha"].pending
+    assert "[1 of 8] look\nNot accepted:" in told and "[2 of 8] look\nBoard for" in told and "[6 of 8]" in told and "[7 of 8]" not in told
+    assert "Only the first 6 of your 8 actions were run." in told
+
+
+# ---- what each turn cost ------------------------------------------------------------------------------------------------------------
+
+def test_every_turn_records_what_was_sent_and_what_it_cost_in_input_output_and_cache(tmp_path, registry):
+    model = Model(Reply(json.dumps(dict(action="look", what="board")), 1000, 40, 700), Reply(json.dumps(dict(action="look", what="board")), 1500, 60, 1200))
+    a = arena(tmp_path, registry, ("alpha", model), turns=2)
+    report = a.run()
+    turns = [r for r in a.journal.records("arena") if r.get("phase") == "turn"]
+    assert [(t["input_tokens"], t["output_tokens"], t["cached_tokens"], t["tokens"]) for t in turns] == [(1000, 40, 700, 1040), (1500, 60, 1200, 1560)]
+    assert set(turns[0]["sent"]) == {"messages", "exchanges", "chars", "system", "pinned", "notebook", "state"} and turns[0]["sent"]["pinned"] > 0
+    [summary] = report.contestants
+    assert (summary["input_tokens"], summary["output_tokens"], summary["cached_tokens"], summary["tokens"]) == (2500, 100, 1900, 2600)
+
+
+# ---- facts measured once ----------------------------------------------------------------------------------------------------------
+
+def test_what_a_checks_inputs_look_like_is_measured_once_pinned_with_the_card_and_kept_for_later_contests(tmp_path, registry):
+    calls = []
+
+    def probe(request, **kw):
+        calls.append(request)
+        return CheckResult("error", reason="RuntimeError: probe: stopped on purpose",
+                           output="host.facts(): ModelFacts(nv=32)\n  system.h: numpy.ndarray dtype=float32 shape=(2, 32, 32)")
+
+    model = Model(act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", model), check=probe, runtime_facts=True, allow_unsandboxed=True, turns=1)
+    a.run()
+    assert len(calls) == 1 and calls[0]["tier"] == "real" and calls[0]["stage"] == STAGE
+    pinned = model.calls[0]["messages"][0]["content"]
+    assert "Measured on this scene at the real tier" in pinned and "system.h: numpy.ndarray dtype=float32 shape=(2, 32, 32)" in pinned
+    assert [r["stage"] for r in a.journal.records("facts")] == [STAGE]
+    again = Model(act(action="look", what="board"))
+    b = arena(tmp_path, registry, ("alpha", again), check=probe, runtime_facts=True, allow_unsandboxed=True, turns=1)
+    b.run()
+    assert len(calls) == 1 and "shape=(2, 32, 32)" in again.calls[0]["messages"][0]["content"]       # read from the journal, not measured again
+
+
+def test_a_call_that_does_not_go_through_loses_neither_the_last_result_nor_what_was_new(tmp_path, registry):
+    alpha = Model(act(action="look", what="board"), LLMError("rate limited"), act(action="look", what="board"))
+    beta = Model(submit(1, "plain gain"), act(action="look", what="board"), act(action="look", what="board"))
+    a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), turns=3)
+    a.run()
+    retry = alpha.calls[2]["messages"][-1]["content"]                         # the call after the one that failed
+    assert "Your last reply did not go through (rate limited)" in retry
+    assert "Board for" in retry                                               # the result of its last turn is still there
+    assert "New on the board since your last move" in retry and "beta: speedup" in retry     # and beta's entry was not used up

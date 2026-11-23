@@ -38,18 +38,25 @@ How entries are judged (the rules, not advice):
 ACTIONS = """\
 Reply with one JSON object per turn:
 
-  {"action": "look", "what": "card", "stage": "<stage>"}       a stage's full card: ports, invariants, implementations, parameters
+  {"action": "look", "what": "card", "stage": "<stage>"}       a stage's full card, pinned at the top of the conversation
   {"action": "look", "what": "entry", "id": "<board id>"}      what a board entry submitted: its stages, parameters and source
   {"action": "look", "what": "attempt", "id": "<attempt id>"}  a check anyone ran: its source and the whole reason it failed (open contests)
-  {"action": "check", "graph": GRAPH}                          the contract checks only
+  {"action": "look", "what": "board"}                          the whole board as it is now
+  {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note is kept in your notebook
   {"action": "submit", "graph": GRAPH, "note": "<why>"}        check, time and rank it: uses one of your timed runs
+  {"actions": [ACTION, ...]}                                   up to {max_actions} of the above in one turn, run in order
 
-  GRAPH = {"stages": {"<stage>": {"impl": "<registered id>", "params": {"<name>": <value>}}  or  {"entry": "Runtime"}}}
+  GRAPH = {"stages": {"<stage>": NODE}}
+  NODE  = {"impl": "<registered id>", "params": {"<name>": <value>}}   a registered implementation
+        | {"entry": "Runtime"}                                         source you write, in a python block
+        | {"base": "<attempt or entry id>"}                            the source of an earlier attempt or entry, as it was or edited
 
 Source for a stage goes in a ```python <stage> block after the JSON (the stage's name after "python"), not inside the JSON;
 `"source": "..."` inside the stage's object also works. The runtime class is the whole candidate: see the stage's card.
+An edit to a base goes in an ```edit <stage> block: hunks of <<<<<<< SEARCH, the old lines, =======, the new lines, >>>>>>> REPLACE;
+each SEARCH must match one place in the base's source. With no edit block, a base is run as it is. With several actions, a stage's
+python and edit blocks are used in the order the actions come, so tag each with its stage.
 """
-
 
 def classes_text(registry: phost.Registry, stages: Sequence[str]) -> str:
     present = {registry.contract(s).swap_class.value for s in stages}
@@ -94,8 +101,17 @@ def facts_text(report: Mapping[str, Any] | None, scene: str, worlds: int) -> str
     return "\n".join(lines)
 
 
+CONTEXT = """\
+What you are shown each turn: the result of your last turn, a notebook of your earlier checks and timed runs that are no longer in
+this conversation (one line each, with the ids you can look at or build on), and what is new on the board and in the others' checks
+since your last move. The conversation keeps your last {keep} turns word for word. The cards of the stages whose speed is ranked are
+pinned at the top, with what a check's inputs measured on this scene; a card you look at is pinned there too. A turn is one call to
+you and counts once against your turns, however many actions it holds.
+"""
+
+
 def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str, scene: str, worlds: Sequence[int],
-                  turns: int, submits: int, open_code: bool, feed: bool = True) -> str:
+                  turns: int, submits: int, open_code: bool, feed: bool = True, keep: int = 6) -> str:
     visibility = ("Everything you submit, source included, is visible to the other contestants, as theirs is to you." if open_code
                   else "Entries show on the board with what they scored, but not what they submitted.")
     if open_code and feed:
@@ -105,7 +121,8 @@ def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str
     return (INTRO + f"\nScene: {scene}. World counts timed: {', '.join(map(str, worlds))}; the board you see is for {max(worlds)} worlds.\n"
             f"Your budget: {turns} turns and {submits} timed runs. The contest ends for you when either is used up; "
             f"there is no other way to leave.\n\n" + facts + "\n\nStages you can replace:\n"
-            + stage_index(registry, stages) + "\n\n" + rules + "\n" + ACTIONS)
+            + stage_index(registry, stages) + "\n\n" + rules + "\n" + CONTEXT.format(keep=keep) + "\n"
+            + ACTIONS.replace("{max_actions}", str(MAX_ACTIONS)))
 
 
 def graph_summary(graph: Mapping[str, Any], limit: int = 90) -> str:
@@ -139,7 +156,9 @@ def render_board(groups: Sequence[Mapping[str, Any]], *, scene: str, worlds: int
     return "\n".join(lines)
 
 
+MAX_ACTIONS = 6
 _PY = re.compile(r"```(?:python|py)[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | re.I)
+_EDIT = re.compile(r"```edit[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | re.I)
 
 
 def parse_action(text: str) -> tuple[dict[str, Any], list[tuple[str, str]]]:
@@ -161,11 +180,12 @@ def parse_action(text: str) -> tuple[dict[str, Any], list[tuple[str, str]]]:
 
 
 def what_text(record: Mapping[str, Any]) -> str:
-    """The stages an attempt or entry replaced, each with its implementation or the size of its source."""
+    """The stages an attempt or entry replaced, each with its implementation or the size of its source (and what it was edited from)."""
     parts = []
     for stage, spec in record["graph"]["stages"].items():
         source = spec.get("source")
-        parts.append(f"{stage} (source, {len(source.splitlines())} lines)" if source else f"{stage} ({spec.get('impl')})")
+        origin = f", from {spec['base']} {spec['edit']}" if spec.get("base") else ""
+        parts.append(f"{stage} (source, {len(source.splitlines())} lines{origin})" if source else f"{stage} ({spec.get('impl')})")
     return ", ".join(parts)
 
 
@@ -181,3 +201,64 @@ def outcome_text(record: Mapping[str, Any], limit: int | None = 150) -> str:
     if printed and limit is not None:                           # a stub: `look` at the attempt has all of it
         text += "; its runtime printed: " + (printed if len(printed) <= 80 else printed[:80] + "...")
     return text
+
+
+class Blocks:
+    """The python and edit blocks of one reply. A stage's blocks are used in the order the actions come."""
+
+    def __init__(self, python: Sequence[tuple[str, str]] = (), edits: Sequence[tuple[str, str]] = ()):
+        self.python, self.edits = list(python), list(edits)
+
+    def untagged(self, kind: str) -> int:
+        return sum(1 for tag, _ in (self.python if kind == "python" else self.edits) if not tag)
+
+    def take(self, kind: str, stage: str, *, untagged_ok: bool = False) -> str | None:
+        pool = self.python if kind == "python" else self.edits
+        for pool_tag in (stage, "") if untagged_ok else (stage,):
+            for i, (tag, code) in enumerate(pool):
+                if tag == pool_tag:
+                    return pool.pop(i)[1]
+        return None
+
+
+def parse_actions(text: str) -> tuple[list[dict[str, Any]], Blocks]:
+    """``([actions], blocks)`` from a reply: ``{"actions": [...]}`` or one ``{"action": ...}``. Raises ValueError, whose message
+    goes back to the model."""
+    if not text or not text.strip():
+        raise ValueError("the reply was empty")
+    python = [(tag, code.strip("\n") + "\n") for tag, code in _PY.findall(text)]
+    edits = [(tag, code) for tag, code in _EDIT.findall(text)]
+    body = _EDIT.sub("", _PY.sub("", text))
+    decoder, i = json.JSONDecoder(), body.find("{")
+    while i != -1:
+        try:
+            obj, _ = decoder.raw_decode(body[i:])
+        except json.JSONDecodeError:
+            obj = None
+        if isinstance(obj, dict) and isinstance(obj.get("actions"), list):
+            actions = obj["actions"]
+            if not actions or not all(isinstance(a, dict) and "action" in a for a in actions):
+                raise ValueError('"actions" is a non-empty list of objects, each with an "action"')
+            return actions, Blocks(python, edits)
+        if isinstance(obj, dict) and "action" in obj:
+            return [obj], Blocks(python, edits)
+        i = body.find("{", i + 1)
+    raise ValueError('no JSON object with an "action" (or "actions") was found')
+
+
+def render_board_delta(groups: Sequence[Mapping[str, Any]], seen: set, *, you: str | None = None) -> str:
+    """What is new on the board since the rows in ``seen`` (their entry ids), each with where it stands now. ``seen`` is updated
+    with every row on the board. Empty when nothing is new."""
+    lines = []
+    for group in groups:
+        for position, row in enumerate(group["rows"], 1):
+            if row["id"] in seen:
+                continue
+            seen.add(row["id"])
+            marks = " ".join(f"{k} {v:.3g}" + ("x" if k == "speedup" else "") for k, v in row["objectives"].items())
+            who = row["label"] + (" (you)" if you and row["label"] == you else "")
+            lines.append(f"  {who}: {marks}  {graph_summary(row['graph'])}  id {row['id']}: now {position} of {len(group['rows'])} "
+                         f"in {group['klass']} on {group['device']}")
+    if not lines:
+        return ""
+    return "New on the board since your last move (look at \"board\" for all of it):\n" + "\n".join(lines)

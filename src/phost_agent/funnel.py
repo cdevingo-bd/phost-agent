@@ -129,6 +129,23 @@ class Funnel:
                     worlds=CHECK_WORLDS, plugins=plugins, scene_modules=list(self.task.scene_modules),
                     scene_dirs=list(self.task.scene_dirs))
 
+    def _call(self, p: Prepared, tier: str) -> CheckResult:
+        """One check request for ``p``, in the sandbox when it is source; a real check on a GPU holds the lease."""
+        def run() -> CheckResult:
+            return self.check(self._request(p, tier), untrusted=p.proposal.source is not None,
+                              allow_unsandboxed=self.allow_unsandboxed, timeout=self.task.check_timeout,
+                              candidate_dir=p.candidate.directory if p.candidate else None)
+        if tier == "real" and not self.world.cpu_only:
+            with self.lease.hold(f"check {p.proposal.impl_id}", timeout=self.task.check_timeout):
+                return run()
+        return run()
+
+    def diagnose(self, proposal: Proposal, tier: str = "real") -> CheckResult:
+        """Run one candidate through one check tier outside the memo and without a verdict: what it printed is the answer. For a
+        probe the arena writes itself (see ``facts.py``), not for a contestant's proposal."""
+        candidate = write_candidate(proposal, self.registry, self.candidates_dir) if proposal.source is not None else None
+        return self._call(Prepared(proposal, key="", candidate=candidate, params=dict(proposal.params)), tier)
+
     def _checked(self, p: Prepared, tier: str, memo_tier: str) -> bool:
         """Run one check tier if the memo has no answer. True when the candidate may go on."""
         stored = None if self.refresh else self.memo.lookup(p.key).get(memo_tier)
@@ -142,15 +159,7 @@ class Funnel:
             return True
         on_gpu = tier == "real" and not self.world.cpu_only
         started = time.monotonic()
-        if on_gpu:
-            with self.lease.hold(f"check {p.proposal.impl_id}", timeout=self.task.check_timeout):
-                result = self.check(self._request(p, tier), untrusted=p.proposal.source is not None,
-                                    allow_unsandboxed=self.allow_unsandboxed, timeout=self.task.check_timeout,
-                                    candidate_dir=p.candidate.directory if p.candidate else None)
-        else:
-            result = self.check(self._request(p, tier), untrusted=p.proposal.source is not None,
-                                allow_unsandboxed=self.allow_unsandboxed, timeout=self.task.check_timeout,
-                                candidate_dir=p.candidate.directory if p.candidate else None)
+        result = self._call(p, tier)
         seconds = time.monotonic() - started
         p.seconds[memo_tier] = seconds
         with self._lock:
