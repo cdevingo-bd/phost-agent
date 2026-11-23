@@ -329,7 +329,7 @@ def main(argv=None) -> int:
     p.add_argument("--keep-turns", type=int, default=6,
                    help="how many of its latest turns a contestant is sent (the rest is the notebook; trimmed in blocks of 3, so 60 "
                         "keeps everything); see --whole-turns for how much of each is sent")
-    p.add_argument("--whole-turns", type=int, default=2,
+    p.add_argument("--whole-turns", type=int, default=1,
                    help="of the turns kept, how many of the newest are sent whole; in older ones a long result is cut and the code "
                         "is replaced by the id it is kept under (a large number sends everything whole)")
     p.add_argument("--preload", type=int, default=3,

@@ -125,7 +125,7 @@ every turn is what made a contest's cost grow with the square of its length:
   same scene reads it instead. `--no-facts` skips it. It is information about the inputs and says nothing about what to do with them.
 - *Window*: the last `--keep-turns` turns (default 6), trimmed back in blocks of 3 rather than one a turn, so the start of the prompt
   stays the same for several calls in a row where a provider caches it. Each past turn holds only what was said and the result; the
-  board and the feed are not copied into it. The newest `--whole-turns` (default 2) are sent as they were. In the older ones a result
+  board and the feed are not copied into it. The newest `--whole-turns` (default 1) are sent as they were. In the older ones a result
   longer than 600 characters is cut there (its first line still names the id, so it can be looked at again) and a python or edit block
   of six lines or more is replaced by the attempt and entry ids the arena kept that turn's source under, which can be looked at or built
   on with `base`. Nothing is removed from the record; it is only not repeated. A large `--whole-turns` sends everything whole.
@@ -178,12 +178,20 @@ the definitions of metrics that are not gated are left for a look at the stage, 
 that scene, with the measured shapes also shortened of a library's internal module paths at render time (`warp._src.types.array` is
 `warp.array`; the probe's stored text is unchanged, because measuring it again costs minutes: a check in the sandbox compiles its
 kernels each time); and the older turns in the window are condensed as above. On the scripted contest (two contestants, 5 000-character
-sources, characters over four, so indicative) 30 turns went from 281-294k tokens with everything whole to 157-165k, and 60 turns from
-0.63-0.66M (before the cards) to 350-367k; the last prompt from about 13.7k to 6.8k. The system prompt was tightened too, which saved
+sources, characters over four, so indicative) 30 turns went from 281-294k tokens with everything whole to 132-139k (`--whole-turns 1`; 157-165k with 2), and 60 turns
+from 0.63-0.66M (before the cards) to 297-312k; the last prompt from about 13.7k to 6k. The system prompt was tightened too, which saved
 about 250 characters of 6.6k: it is mostly rules and the action forms, which this does not remove. What none of this touches: the
 CLI's own 2.5k-token prefix, and the model's thinking, which is most of the output. And, again, a shorter, condensed window may cost a
-model something that a scripted contest cannot show: compare the best entry at equal turns with `--whole-turns 2` against
+model something that a scripted contest cannot show: compare the best entry at equal turns with `--whole-turns 1` against
 `--whole-turns 99`.
+
+**The first real run after that** (`haiku`, `effort=low`, 9 turns, stopped by `--tokens 120000` with no timed run): 7.3k tokens of
+input at turn 1 (8.2k before) and 17.5k at turn 9 (20k before), 14k a turn on average (17k before), a smaller saving than the scripted
+contest, because 8 of the 9 turns were `look`s at other entries' sources: each result is about 8k characters and, with
+`--whole-turns 2`, was sent whole three times (when new, then in the two newest exchanges) before it was cut. The window was still
+62% of the prompt at turn 9 (24.8k of 39.9k characters; system 6.5k, pinned 8.6k), so `--whole-turns` now defaults to 1. That run also
+had an unreadable reply (15k in, 2.6k out, spent) whose text was not kept; the journal now keeps the first 600 characters of an
+unreadable reply as `reply_head`, and it re-looked at an entry it had read four turns earlier, which a cut result makes possible.
 
 **What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
 class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate

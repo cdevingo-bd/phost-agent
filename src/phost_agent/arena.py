@@ -373,7 +373,8 @@ class Arena:
             action, text = self._act(c, reply.text)
         c.exchanges = window + [Exchange(c.turns, c.pending, reply.text.strip() or "(empty)")]
         c.pending = text
-        self.journal.append("arena", phase="turn", contestant=c.name, turn=c.turns, action=action, tokens=reply.tokens,
+        unread = dict(reply_head=redact(reply.text.strip()[:600])) if action == "(unreadable)" else {}     # so it can be diagnosed
+        self.journal.append("arena", phase="turn", contestant=c.name, turn=c.turns, action=action, tokens=reply.tokens, **unread,
                             input_tokens=reply.input_tokens, output_tokens=reply.output_tokens, cached_tokens=reply.cached_tokens,
                             estimated=reply.estimated, contest=self.contest,
                             sent=dict(messages=len(messages), exchanges=len(window), chars=sum(len(m["content"]) for m in messages),

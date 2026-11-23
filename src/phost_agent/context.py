@@ -6,7 +6,7 @@ turn and the cost of a contest grew with the square of its length. The prompt is
 
   pinned     the cards the contestant is working from, once, at the top; changes only when a card is added
   window     the last few exchanges, trimmed in blocks so that the start of the prompt stays the same for several turns in a row
-             (a provider that caches the start of a prompt can serve it); the newest two are whole, and in the older ones a long
+             (a provider that caches the start of a prompt can serve it); the newest is whole, and in the older ones a long
              result is cut and the code the contestant wrote is replaced by the id it is kept under (``condense``)
   notebook   one line for each earlier check and timed run that is no longer in the window: id, what, outcome, the contestant's
              own note, and the first line it printed; compiled from the arena's records, so nothing is asked of the model and
@@ -26,7 +26,7 @@ from .arena_text import outcome_text, what_text
 
 SLACK = 3                  # exchanges kept beyond the window before it is trimmed back (so the prompt's start is stable for SLACK + 1 turns)
 NOTEBOOK_LINES = 24        # lines shown in full; older ones are listed by id
-WHOLE_TURNS = 2            # the newest exchanges sent as they were; older ones in the window are condensed
+WHOLE_TURNS = 1            # the newest exchanges sent as they were; older ones in the window are condensed
 OLD_RESULT = 600           # characters of an older result that are repeated (the start: what happened and why)
 CODE_LINES = 6             # a code block of at least this many lines is replaced in an older reply
 _FENCE = re.compile(r"```(python|py|edit)[ \t]*([\w.\-]*)[ \t]*\r?\n(.*?)```", re.S | re.I)

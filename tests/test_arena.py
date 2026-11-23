@@ -312,6 +312,8 @@ def test_an_unreadable_reply_and_an_unknown_action_and_a_bad_graph_each_get_an_e
     replies = [c["messages"][-1]["content"] for c in model.calls[1:]]
     assert "could not be read" in replies[0] and "Unknown action 'fly'" in replies[1]
     assert "at least one stage" in replies[2] and "no stage 'no.such'" in replies[3]
+    unread = [t for t in a.journal.records("arena") if t.get("phase") == "turn" and t["action"] == "(unreadable)"]
+    assert len(unread) == 1 and unread[0]["reply_head"] == "I think I will try something clever."     # kept, so it can be diagnosed
 
 
 def test_a_failed_call_costs_a_turn_and_a_fatal_one_removes_only_that_contestant(tmp_path, registry):
