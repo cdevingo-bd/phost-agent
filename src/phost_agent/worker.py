@@ -8,11 +8,13 @@ the sandbox ``phost_author`` provides when there is one (see ``checker.py``).
 
     cheap   the cheapest simulator-free host that offers the stage: phost's fake host, else the NumPy chain host. It needs
             no device, so many of these can run at once.
-    real    the scene's own host, built by the scene's engine (MuJoCo Warp, the chain, ...).
+    real    the scene's own host, built by the scene's engine (MuJoCo Warp, the chain, ...): the engine says how to
+            get one a contract check can drive, so nothing here knows which simulator it is.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import sys
 import traceback
@@ -34,33 +36,15 @@ def cheap_host(stage: str):
     return None
 
 
+@contextlib.contextmanager
 def real_host(scene, worlds: int):
-    """A host over ``scene`` that can be driven by a contract check, and a context manager that keeps its device open."""
-    import contextlib
-
-    from phost_lab.engine import engine_for
+    """The scene's own host, built by the scene's engine (MuJoCo Warp, the chain, ...), driveable by a contract check and with the
+    engine's device open for the length of the block. Yields ``(host, engine name)``. Nothing here names a simulator."""
+    from phost_lab.engine import check_host, engine_for
 
     engine = engine_for(scene)
-    if engine.name == "mjwarp":
-        import mujoco
-        import mujoco_warp as mjw
-        import warp as wp
-        from phost.testing.mjwarp import DrivableMJWarpHost
-
-        cpu_model = mujoco.MjModel.from_xml_string(scene.xml())
-        cpu = mujoco.MjData(cpu_model)
-        for _ in range(scene.settle_steps):
-            mujoco.mj_step(cpu_model, cpu)
-        mujoco.mj_forward(cpu_model, cpu)
-        with wp.ScopedDevice("cuda:0"):
-            model = mjw.put_model(cpu_model)
-            data = mjw.put_data(cpu_model, cpu, nworld=worlds, nconmax=scene.nconmax(worlds), njmax=scene.constraints)
-        return DrivableMJWarpHost(model, data, cpu_model=cpu_model, cpu_data=cpu), engine.name, contextlib.nullcontext()
-    loaded = engine.load(scene)
-    host = loaded.instance(worlds).host
-    if not hasattr(host, "drive"):
-        raise LookupError(f"the {engine.name!r} engine's host cannot be driven by a contract check (it has no drive())")
-    return host, engine.name, loaded
+    with engine.load(scene) as loaded:
+        yield check_host(loaded, worlds), engine.name
 
 
 def main() -> int:
@@ -83,28 +67,23 @@ def main() -> int:
         registry = load_registry(request.get("plugins", ()))
         stage, impl_id = request["stage"], request["impl"]
         selection = Selection(stage, impl_id, request.get("params", {}))
-        if request["tier"] == "cheap":
-            built = cheap_host(stage)
-            if built is None:
-                emit(status="skipped", reason="no simulator-free host offers this stage")
-                return 0
-            host, host_name = built
-            scope = None
-        else:
-            scene = load_scenes(request.get("scene_modules", ()), request.get("scene_dirs", ())).get(request["scene"])
-            host, host_name, scope = real_host(scene, int(request.get("worlds", 2)))
         try:
-            if scope is not None:
-                scope.__enter__()
-            verdict = check_impl(host, selection, registry)
+            if request["tier"] == "cheap":
+                built = cheap_host(stage)
+                if built is None:
+                    emit(status="skipped", reason="no simulator-free host offers this stage")
+                    return 0
+                host, host_name = built
+                verdict = check_impl(host, selection, registry)
+            else:
+                scene = load_scenes(request.get("scene_modules", ()), request.get("scene_dirs", ())).get(request["scene"])
+                with real_host(scene, int(request.get("worlds", 2))) as (host, host_name):
+                    verdict = check_impl(host, selection, registry)
         except phost.ApplicabilityError as error:
             if request["tier"] == "cheap":
                 emit(status="skipped", host=host_name, reason=f"does not apply on the {host_name} host: {error}")
                 return 0
             raise
-        finally:
-            if scope is not None:
-                scope.__exit__(None, None, None)
         emit(status="pass" if verdict.ok else "fail", host=host_name, failures=list(verdict.failures),
              metrics={k: float(v) for k, v in verdict.metrics.items()})
         return 0
