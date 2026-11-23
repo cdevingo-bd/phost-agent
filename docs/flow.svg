@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 800" width="1000" height="800" role="img" aria-labelledby="ttl dsc">
+<title id="ttl">phost-agent: models take turns; every proposal passes a funnel before it earns a timed run</title>
+<desc id="dsc">Contestants are language models behind any provider: Claude Code, the Claude API, OpenAI-compatible endpoints, a local model, or a program of your own. Each turn is one stateless call: a prompt of the system text, pinned stage cards, a short window of recent exchanges, a notebook and the new state, answered with one or more actions: look, preview, check or submit. A candidate is a registered implementation with parameters, typed text, source, or an edit to an earlier source. A proposal passes a funnel: ceiling, static, cheap check, real check, timed run under a device lease, then the ledger and journal. A memo answers a repeated candidate, budgets bound turns, timed runs and tokens, and the board is phost-score's.</desc>
+<style>
+  :root { --bg:#ffffff; --ink:#1b1b1a; --ink2:#4a4945; --muted:#66645f; --line:#8c8a84; --rule:#d6d5cf;
+          --host:#efeeea; --accent:#1f5fbf; --accentfill:#e8f0fb; --onaccent:#ffffff; --warn:#8a4b00; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161615; --ink:#ecebe7; --ink2:#c2c1ba; --muted:#8f8d86; --line:#77756f; --rule:#34332f;
+            --host:#242422; --accent:#6ea2f0; --accentfill:#1b2a40; --onaccent:#0d1726; --warn:#e0a458; }
+  }
+  text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--ink); font-size: 12px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace; }
+  .title { font-size: 16px; font-weight: 700; }
+  .head { font-size: 13px; font-weight: 700; }
+  .sub { fill: var(--ink2); }
+  .small { font-size: 11px; fill: var(--ink2); }
+  .tag { font-size: 10.5px; fill: var(--muted); }
+  .bold { font-weight: 700; }
+  .acc { fill: var(--accent); }
+  .mut { fill: var(--muted); }
+  .warn { fill: var(--warn); }
+  .box { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+  .hostbox { fill: var(--host); stroke: var(--line); stroke-width: 1; }
+  .corebox { fill: var(--accentfill); stroke: var(--accent); stroke-width: 1; }
+  .ownbox { fill: var(--bg); stroke: var(--accent); stroke-width: 1.4; }
+  .yours { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 4 3; }
+  .frame { fill: none; stroke: var(--rule); stroke-width: 1; }
+  .rule { stroke: var(--rule); stroke-width: 1; fill: none; }
+  .ln { stroke: var(--line); stroke-width: 1; fill: none; }
+  .arrow { stroke: var(--ink2); stroke-width: 1.2; fill: none; marker-end: url(#h); }
+  .aarrow { stroke: var(--accent); stroke-width: 1.2; fill: none; marker-end: url(#ha); }
+  .back { stroke: var(--muted); stroke-width: 1; fill: none; stroke-dasharray: 3 3; marker-end: url(#h); }
+  .badge { fill: var(--accent); }
+  .badgetx { fill: var(--onaccent); font-size: 10.5px; font-weight: 700; text-anchor: middle; }
+</style>
+<defs><marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--ink2)"/></marker><marker id="ha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" style="fill:var(--accent)"/></marker></defs>
+<rect x="0" y="0" width="1000" height="800" style="fill:var(--bg)"/>
+<text x="24" y="28" class="title" text-anchor="start">phost-agent: models take turns; every proposal passes a funnel before it earns a timed run</text>
+<text x="24" y="62" class="head" text-anchor="start">contestants</text>
+<text x="24" y="78" class="small" text-anchor="start">any provider, no coaching</text>
+<text x="256" y="62" class="head acc" text-anchor="start">a turn: one stateless call</text>
+<text x="256" y="78" class="small" text-anchor="start">what is sent, what comes back</text>
+<text x="618" y="62" class="head" text-anchor="start">funnel</text>
+<text x="618" y="78" class="small" text-anchor="start">stops at the first failure</text>
+<rect x="24" y="100" width="200" height="58" rx="3" class="box"/>
+<text x="33" y="118" class="head" text-anchor="start">claude-code</text>
+<text x="33" y="135" class="small" text-anchor="start">Claude Code on this machine,</text>
+<text x="33" y="149" class="small" text-anchor="start">no API key</text>
+<rect x="24" y="168" width="200" height="48" rx="3" class="box"/>
+<text x="33" y="186" class="head" text-anchor="start">Claude API</text>
+<text x="33" y="203" class="small" text-anchor="start">with a key</text>
+<rect x="24" y="226" width="200" height="48" rx="3" class="box"/>
+<text x="33" y="244" class="head" text-anchor="start">OpenAI-compatible</text>
+<text x="33" y="261" class="small" text-anchor="start">any endpoint that speaks it</text>
+<rect x="24" y="284" width="200" height="48" rx="3" class="box"/>
+<text x="33" y="302" class="head" text-anchor="start">a local model</text>
+<text x="33" y="319" class="small" text-anchor="start">for example ollama</text>
+<rect x="24" y="342" width="200" height="58" rx="3" class="yours"/>
+<text x="33" y="360" class="head" text-anchor="start">your program</text>
+<text x="33" y="377" class="small" text-anchor="start">cmd: reads a prompt, prints</text>
+<text x="33" y="391" class="small" text-anchor="start">an action</text>
+<path d="M227,190 L252,190" class="aarrow"/>
+<rect x="256" y="100" width="330" height="46" rx="3" class="box"/>
+<text x="265" y="118" class="bold mono" text-anchor="start">system</text>
+<text x="265" y="135" class="small" text-anchor="start">facts, rules, actions; the same for all</text>
+<rect x="256" y="152" width="330" height="46" rx="3" class="box"/>
+<text x="265" y="170" class="bold mono" text-anchor="start">pinned cards</text>
+<text x="265" y="187" class="small" text-anchor="start">compact; a stage's typed form is on it</text>
+<rect x="256" y="204" width="330" height="46" rx="3" class="box"/>
+<text x="265" y="222" class="bold mono" text-anchor="start">window</text>
+<text x="265" y="239" class="small" text-anchor="start">the last turns; older ones condensed</text>
+<rect x="256" y="256" width="330" height="46" rx="3" class="box"/>
+<text x="265" y="274" class="bold mono" text-anchor="start">notebook</text>
+<text x="265" y="291" class="small" text-anchor="start">its own earlier checks and runs, a line each</text>
+<rect x="256" y="308" width="330" height="46" rx="3" class="box"/>
+<text x="265" y="326" class="bold mono" text-anchor="start">state</text>
+<text x="265" y="343" class="small" text-anchor="start">what is new on the board and in others' checks</text>
+<path d="M421.0,354 L421.0,370" class="aarrow"/>
+<rect x="256" y="372" width="330" height="118" rx="3" class="corebox"/>
+<text x="265" y="390" class="bold mono" text-anchor="start">the reply: actions</text>
+<text x="266" y="410" class="small mono bold" text-anchor="start">look</text>
+<text x="332" y="410" class="small" text-anchor="start">a card, an entry, an attempt, a diff, the board</text>
+<text x="266" y="425" class="small mono bold" text-anchor="start">preview</text>
+<text x="332" y="425" class="small" text-anchor="start">a typed form on a sample: no check, no run</text>
+<text x="266" y="440" class="small mono bold" text-anchor="start">check</text>
+<text x="332" y="440" class="small" text-anchor="start">the contract checks only</text>
+<text x="266" y="455" class="small mono bold" text-anchor="start">submit</text>
+<text x="332" y="455" class="small" text-anchor="start">check, time and rank it: a timed run</text>
+<text x="266" y="474" class="tag" text-anchor="start">a candidate: impl + params, typed text, source, or base + edit</text>
+<rect x="618" y="100" width="358" height="46" rx="3" class="corebox"/>
+<text x="627" y="118" class="bold mono" text-anchor="start">0 ceiling</text>
+<text x="627" y="135" class="small" text-anchor="start">is there anything to gain at all? asked once</text>
+<path d="M638,147 L638,161" class="aarrow"/>
+<rect x="618" y="162" width="358" height="46" rx="3" class="corebox"/>
+<text x="627" y="180" class="bold mono" text-anchor="start">1 static</text>
+<text x="627" y="197" class="small" text-anchor="start">well formed: stage, impl, valid params, source parses</text>
+<path d="M638,209 L638,223" class="aarrow"/>
+<rect x="618" y="224" width="358" height="46" rx="3" class="corebox"/>
+<text x="627" y="242" class="bold mono" text-anchor="start">2 cheap check</text>
+<text x="627" y="259" class="small" text-anchor="start">the stage's contract check, simulator-free host</text>
+<path d="M638,271 L638,285" class="aarrow"/>
+<rect x="618" y="286" width="358" height="46" rx="3" class="corebox"/>
+<text x="627" y="304" class="bold mono" text-anchor="start">3 real check</text>
+<text x="627" y="321" class="small" text-anchor="start">the same check, on this scene's own host</text>
+<path d="M638,333 L638,347" class="aarrow"/>
+<rect x="618" y="348" width="358" height="46" rx="3" class="corebox"/>
+<text x="627" y="366" class="bold mono" text-anchor="start">4 timed run</text>
+<text x="627" y="383" class="small" text-anchor="start">device to itself, against the host's own step</text>
+<path d="M638,395 L638,409" class="aarrow"/>
+<rect x="618" y="410" width="358" height="46" rx="3" class="ownbox"/>
+<text x="627" y="428" class="bold mono" text-anchor="start">5 ledger + journal</text>
+<text x="627" y="445" class="small" text-anchor="start">what was measured, appended to both</text>
+<path d="M589,442 L602,442 L602,185 L614,185" class="aarrow"/>
+<path d="M24,488 L976,488" class="rule"/>
+<rect x="24" y="506" width="16" height="16" rx="2" class="badge"/>
+<text x="32" y="518" class="badgetx">1</text>
+<text x="48" y="518" class="head" text-anchor="start">Around the funnel</text>
+<text x="179.0" y="518" class="sub" text-anchor="start">what keeps it safe and cheap to run</text>
+<rect x="24" y="534" width="300" height="74" rx="3" class="box"/>
+<text x="33" y="552" class="bold mono" text-anchor="start">memo</text>
+<text x="33" y="569" class="small" text-anchor="start">content-addressed: a candidate already</text>
+<text x="33" y="583" class="small" text-anchor="start">seen is answered from the memo and</text>
+<text x="33" y="597" class="small" text-anchor="start">still counts as an attempt</text>
+<rect x="350" y="534" width="300" height="74" rx="3" class="box"/>
+<text x="359" y="552" class="bold mono" text-anchor="start">device lease</text>
+<text x="359" y="569" class="small" text-anchor="start">a timed run never shares the device;</text>
+<text x="359" y="583" class="small" text-anchor="start">--workers N (focused search): CPU</text>
+<text x="359" y="597" class="small" text-anchor="start">checks in parallel, on a CPU engine</text>
+<rect x="676" y="534" width="300" height="74" rx="3" class="box"/>
+<text x="685" y="552" class="bold mono" text-anchor="start">budgets</text>
+<text x="685" y="569" class="small" text-anchor="start">turns, timed runs, tokens: per</text>
+<text x="685" y="583" class="small" text-anchor="start">contestant; every token sent and</text>
+<text x="685" y="597" class="small" text-anchor="start">received counts, cached or not</text>
+<rect x="24" y="632" width="16" height="16" rx="2" class="badge"/>
+<text x="32" y="644" class="badgetx">2</text>
+<text x="48" y="644" class="head" text-anchor="start">The board</text>
+<text x="123.0" y="644" class="sub" text-anchor="start">phost-score's, shown to every contestant</text>
+<rect x="24" y="660" width="460" height="62" rx="3" class="box"/>
+<text x="33" y="678" class="bold mono" text-anchor="start">ranked like with like</text>
+<text x="33" y="695" class="small" text-anchor="start">same scene, device and world count; speedup, a speed and</text>
+<text x="33" y="709" class="small" text-anchor="start">accuracy front, step time or overhead by swap class</text>
+<rect x="516" y="660" width="460" height="62" rx="3" class="box"/>
+<text x="525" y="678" class="bold mono" text-anchor="start">open contests</text>
+<text x="525" y="695" class="small" text-anchor="start">every entry and every check, passed or failed, is visible to</text>
+<text x="525" y="709" class="small" text-anchor="start">the others: read an outline, a diff, or build on it with base</text>
+<text x="24" y="750" class="small" text-anchor="start">A focused search (phost-agent run) uses the same funnel on one stage, driven by a baseline, a program or a model.</text>
+<text x="24" y="766" class="small" text-anchor="start">The scene can be any engine the lab has; the CPU chains need no GPU. phost-dash's Research tab reads the journal this writes.</text>
+</svg>

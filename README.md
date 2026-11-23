@@ -12,11 +12,15 @@ Around it are the pieces that make that safe to run: a tiered funnel that keeps 
 content-addressed memo, a per-device lease, and budgets. The same machinery also runs a **focused search** on one stage, driven by a
 baseline, a program or a model.
 
+![Contestants (any provider) each take turns. A turn's prompt holds the stage cards, the live board and the budget left; the reply is one action: look at a stage, read a rival's entry, preview a typed form, check a graph, or enter one. An entry goes down a funnel of cheaper checks first (ceiling, static, cheap check, real check), then a timed run, then the ledger. A memo answers repeats, a lease serialises the device, and budgets end the contest. The board is phost-score's.](docs/flow.svg)
+
 ```
 phost-agent llms                                                   # the model providers there are, and what each needs
 phost-agent arena --scene chain256:ringing \
     --contestant opus=claude-code:opus --contestant sonnet=claude-code:sonnet \
     --turns 20 --submits 4 --tokens 200000                         # models compete; the board is printed at the end
+phost-agent arena --scene chain256:ringing --typed \
+    --contestant opus=claude-code:opus --turns 20                  # typed equations and solver steps as candidates, with a preview that costs no check
 phost-agent prompt --scene chain256:ringing --stage effective.solve   # what a model is sent first in a focused search (sends nothing)
 phost-agent run --scene chain256:ringing --stage effective.solve \
     --attempts 12 --proposer llm:anthropic                         # a focused search on one stage, driven by a model
@@ -28,6 +32,11 @@ phost-agent status                                                 # funnel, mem
 
 It needs phost, phost-lab and phost-score; phost-author (for the sandbox, and typed expressions as candidates) is optional. None
 is on PyPI yet, so install from clones (see the phost README), then `pip install -e phost-agent`.
+
+A scene names its engine, and the arena goes through that engine. The examples here use the NumPy chain (`chain256:ringing`), which
+needs no GPU; the same commands take a MuJoCo Warp scene (`trampoline8:impact`) on a machine that has one. The stages a contestant is
+shown, their cards and their typed forms come from the registries and the engine's own host, so they follow the scene. The device
+lease is per device (`cuda:0`, or `cpu` for a CPU engine); see [The device lease](#the-device-lease).
 
 ## The funnel
 
