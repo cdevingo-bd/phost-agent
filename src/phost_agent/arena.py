@@ -42,6 +42,7 @@ from .llm.base import ChatClient, LLMError, LLMFatal, redact
 from .memo import key_for
 from .proposal import Proposal
 from .task import Task, resolve
+from .typed import preview_text, typed_note, typed_stages
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,7 @@ class Arena:
         self.ledger = ledger if ledger is not None else Ledger(default_ledger())
         self.registry = load_registry(task.plugins, registry)
         self.stages = sorted(getattr(c, "name", c) for c in self.registry.contracts())
+        self.typed = typed_stages(self.registry, self.stages)             # the stages that take a typed form here (phost-author loaded)
         self.probe = task.for_stage(self.stages[0])
         self.world = resolve(self.probe, self.registry)
         self.lease = lease or Lease(self.world.lease_device)
@@ -178,7 +180,8 @@ class Arena:
         self.stage_names = listed
         self.system = redact(system_prompt(registry=self.registry, stages=listed, facts=self.facts, scene=self.task.scene,
                                            worlds=self.task.worlds, turns=self.turns, submits=self.submits, open_code=self.open_code,
-                                           feed=self.feed_rows > 0, keep=self.keep_turns, whole=self.whole_turns))
+                                           feed=self.feed_rows > 0, keep=self.keep_turns, whole=self.whole_turns,
+                                           typed=[s for s in listed if s in self.typed]))
         self.preloaded = self._ranked_stages(report, self.preload)
         for stage in self.preloaded:
             self._card_text(stage)                       # measured once here, so no contestant spends a turn on it
@@ -202,7 +205,7 @@ class Arena:
         if (stage, full) not in self._cards:
             card = stage_card(self.registry, stage)
             skeleton = source_skeleton(card, list_ports=full).rstrip()
-            text = (render_card(card, compact=not full) + "\n\n## the source of a candidate for this stage, as a skeleton\n\n```python\n"
+            text = (render_card(card, compact=not full, typed=typed_note(self.registry, stage)) + "\n\n## the source of a candidate for this stage, as a skeleton\n\n```python\n"
                     + skeleton + "\n```")
             measured = self._measured(stage, card, source_skeleton(card).rstrip()) if self.runtime_facts else ""
             self._cards[stage, full] = text + ("\n\n" + facts_block(measured) if measured else "")
@@ -457,13 +460,16 @@ class Arena:
         try:
             if kind == "look":
                 return "look", self._look(c, action)
+            if kind == "preview" and self.typed:
+                c.reads.append((c.turns, f"preview {action.get('stage')}"))
+                return "preview", preview_text(self.registry, self.stages, action)
             if kind in ("check", "submit"):
                 graph = self._graph(action.get("graph"), blocks, c, untagged_ok)
                 note = str(action.get("note", ""))
                 return str(kind), self._check(c, graph, note) if kind == "check" else self._submit(c, graph, note)
         except ContractError as error:
             return str(kind), f"Not accepted: {error}"
-        return str(kind), f'Unknown action {kind!r}; the actions are look, check and submit.'
+        return str(kind), f"Unknown action {kind!r}; the actions are look, " + ("preview, " if self.typed else "") + "check and submit."
 
     def _look(self, c: Contestant, action: Mapping[str, Any]) -> str:
         what = action.get("what")

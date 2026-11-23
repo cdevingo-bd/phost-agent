@@ -100,10 +100,12 @@ def task_brief(task: Task, world: World, gate: Gate | None, budget: Budget | Non
     )
 
 
-def render_card(card: Mapping[str, Any], *, compact: bool = False) -> str:
+def render_card(card: Mapping[str, Any], *, compact: bool = False, typed: str = "") -> str:
     """The card as Markdown. ``compact`` keeps what every candidate needs (ports, invariants, what is gated, which implementations
-    exist) and leaves for a look at the stage what only matters when building on something: the implementations' parameters, the
-    definition of each metric that is not gated, and the typed law."""
+    exist) and leaves for a look at the stage what only matters when building on something: the implementations' parameters and the
+    definition of each metric that is not gated. ``typed`` is the stage's typed form described for a contestant (``typed.typed_note``);
+    it is on the compact card too, since a typed candidate is the cheap one, and replaces the raw form and that implementation's
+    parameter list."""
     judged = "" if compact else f": {card['judging']}"
     lines = [f"# stage {card['name']} (v{card['version']})", "", card["doc"], "", f"swap class **{card['swap_class']}**{judged}", ""]
     if card["entry"]:
@@ -127,19 +129,24 @@ def render_card(card: Mapping[str, Any], *, compact: bool = False) -> str:
                                              for m in card["metrics"]]
         if card["tolerances"]:
             lines += ["", "## gates", ""] + [f"- `{t['metric']}` must stay at or below {t['max']}" for t in card["tolerances"]]
-        if card["equation"]:
+        if card["equation"] and not typed:
             lines += ["", "## typed law", "", f"The stage takes a typed law: `{card['equation']}`"]
+    if typed:
+        lines += ["", typed]
     lines += ["", "## implementations", ""]
     for impl in card["impls"]:
         extra = f" [{impl['swap_class']}]" if impl["swap_class"] else ""
+        if typed and impl["kind"] == "expression":
+            lines.append(f"- `{impl['id']}` ({impl['kind']}{extra}) {impl['title']}: the typed form above")
+            continue
         if compact:
             lines.append(f"- `{impl['id']}` ({impl['kind']}{extra}) {impl['title']}")
             continue
         specs = ", ".join(f"{p['name']}:{p['type']}={p['default']!r}" for p in impl["params"]) or "no params"
         lines.append(f"- `{impl['id']}` ({impl['kind']}{extra}) {impl['title']}: {specs}" + (f". {impl['fit']}" if impl["fit"] else ""))
     if compact:
-        lines += ["", "(Compact card. Looking at the stage pins the full one: the implementations' parameters, every metric's "
-                      "definition and the typed law.)"]
+        lines += ["", "(Compact card. Looking at the stage pins the full one: the implementations' parameters and every metric's "
+                      "definition.)"]
     return "\n".join(lines) + "\n"
 
 

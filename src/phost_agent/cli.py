@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sys
 import time
@@ -180,7 +181,15 @@ def _contestants(args) -> list[Contestant]:
     return out
 
 
+TYPED_PLUGIN = "phost_author.expression_impls"
+
+
 def cmd_arena(args) -> int:
+    if args.typed and TYPED_PLUGIN not in args.plugin:
+        if importlib.util.find_spec("phost_author") is None:
+            print("--typed needs phost-author (pip install -e phost-author)", file=sys.stderr)
+            return 2
+        args.plugin.append(TYPED_PLUGIN)                   # the dash started with --dash then knows the typed forms too
     task = ArenaTask(scene=args.scene, worlds=args.worlds, steps=args.steps, launches=args.launches, repeats=args.repeats,
                      driver=args.driver, plugins=tuple(args.plugin), scene_modules=tuple(args.scene_module),
                      scene_dirs=tuple(args.scene_dir), run_timeout=args.run_timeout)
@@ -335,6 +344,9 @@ def main(argv=None) -> int:
     p.add_argument("--preload", type=int, default=3,
                    help="how many stage cards (the biggest shares of the step, compact) every contestant starts with, 0 to 3 or more; "
                         "each is sent on every turn, a card looked at is pinned in full")
+    p.add_argument("--typed", action="store_true",
+                   help=f"offer the typed forms (--plugin {TYPED_PLUGIN}): a stage's candidate can be a few lines of text, and "
+                        "contestants get a preview action that tries one without a check")
     p.add_argument("--no-facts", action="store_true",
                    help="do not run the probe that measures what a check hands a runtime (shapes, dtypes, installed libraries)")
     p.add_argument("--feed", type=int, default=10, help="how many of the others' latest checks each turn shows (0: none; open contests only)")

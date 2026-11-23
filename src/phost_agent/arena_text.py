@@ -45,7 +45,7 @@ Reply with one JSON object per turn:
       all of it. Your own is shown whole; add "view": "outline" for the outline.
   {"action": "look", "what": "diff", "a": "<id>", "b": "<id>"}  what changed in the source from one attempt or entry to another
   {"action": "look", "what": "board"}                          the whole board now
-  {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note goes in your notebook
+{preview}  {"action": "check", "graph": GRAPH, "note": "<why>"}         the contract checks only; the note goes in your notebook
   {"action": "submit", "graph": GRAPH, "note": "<why>"}        check, time and rank it: uses one of your timed runs
   {"actions": [ACTION, ...]}                                   up to {max_actions} of the above in one turn, in order
 
@@ -60,6 +60,13 @@ in the stage's object also works. The runtime class is the whole candidate (see 
 place in the base's source; with no edit block a base runs as it is. With several actions, a stage's python and edit blocks are
 used in the order the actions come, so tag each with its stage.
 """
+
+PREVIEW = """\
+  {"action": "preview", "stage": "<typed stage>", "params": {...}, "variants": [{<params to change>}, ...]}
+      what a typed form does on a random sample, in one line for the params and each variant: no check, no timed run, no source.
+      Typed forms: {typed}. Several ideas in one turn cost one call.
+"""
+
 
 def classes_text(registry: phost.Registry, stages: Sequence[str]) -> str:
     present = {registry.contract(s).swap_class.value for s in stages}
@@ -115,7 +122,8 @@ looking at a stage pins its full card. A turn is one call to you and counts once
 
 
 def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str, scene: str, worlds: Sequence[int],
-                  turns: int, submits: int, open_code: bool, feed: bool = True, keep: int = 6, whole: int = 2) -> str:
+                  turns: int, submits: int, open_code: bool, feed: bool = True, keep: int = 6, whole: int = 2,
+                  typed: Sequence[str] = ()) -> str:
     visibility = ("Everything you submit, source included, is visible to the other contestants, as theirs is to you." if open_code
                   else "Entries show on the board with what they scored, but not what they submitted.")
     if open_code and feed:
@@ -126,7 +134,7 @@ def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str
             f"Your budget: {turns} turns and {submits} timed runs. The contest ends for you when either is used up; "
             f"there is no other way to leave.\n\n" + facts + "\n\nStages you can replace:\n"
             + stage_index(registry, stages) + "\n\n" + rules + "\n" + CONTEXT.format(keep=keep, whole=whole) + "\n"
-            + ACTIONS.replace("{max_actions}", str(MAX_ACTIONS)))
+            + ACTIONS.replace("{preview}", PREVIEW.replace("{typed}", ", ".join(typed)) if typed else "").replace("{max_actions}", str(MAX_ACTIONS)))
 
 
 def graph_summary(graph: Mapping[str, Any], limit: int = 90) -> str:

@@ -5,6 +5,8 @@ import sys
 
 import pytest
 
+import phost
+from phost_agent import Journal
 from phost_agent.cli import main
 from phost_score import default_ledger, Ledger
 from conftest import GOOD_SOLVER, SCENE, STAGE
@@ -74,3 +76,34 @@ def test_dash_serves_the_same_state_so_the_contestants_are_on_its_board_and_its_
     assert out.index("phost-dash is running") < out.index("[alpha] turn 1") and seen["url"] in out
     assert seen["status"] == 200 and set(seen["rows"]) == {("alpha", "self-reported"), ("beta", "self-reported")}
     assert "The contest is over. The dashboard stays up" in out
+
+
+@pytest.fixture
+def own_registry(monkeypatch):
+    """The command loads a plugin into phost's default registry, which a whole test run shares: give it one of its own."""
+    monkeypatch.setattr(phost, "default", phost.Registry())
+
+
+def previewer(tmp_path):
+    """A model that asks for a preview of the solver stage's typed form on every turn."""
+    action = json.dumps({"action": "preview", "stage": STAGE, "variants": [{"iterations": 4}]})
+    path = tmp_path / "previewer.py"
+    path.write_text(f"import sys\nsys.stdin.read()\nprint({action!r})\n")
+    return f"{sys.executable} {path}"
+
+
+def test_typed_offers_the_typed_forms_and_a_preview_costs_no_check(cli, tmp_path, own_registry):
+    pytest.importorskip("phost_author")
+    code, out, err = cli("arena", *BASE, "--contestant", f"p=cmd:{previewer(tmp_path)}", "--turns", "2", "--submits", "1", "--typed",
+                         "--allow-unsandboxed", "--out", str(tmp_path / "report.json"))
+    assert code == 0, err
+    assert "[p] turn 1   preview" in out and "Preview of `effective.solve/expression`" in out
+    phases = [r.get("phase") for r in Journal(tmp_path / "journal.jsonl").records("arena")]
+    assert phases.count("turn") == 2 and "attempt" not in phases                  # two turns, and no check was spent on either
+
+
+def test_without_typed_a_preview_is_not_an_action(cli, tmp_path, own_registry):
+    code, out, err = cli("arena", *BASE, "--contestant", f"p=cmd:{previewer(tmp_path)}", "--turns", "2", "--submits", "1",
+                         "--allow-unsandboxed", "--out", str(tmp_path / "report.json"))
+    assert code == 0, err
+    assert "Unknown action 'preview'; the actions are look, check and submit." in out

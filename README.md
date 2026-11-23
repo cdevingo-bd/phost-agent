@@ -84,7 +84,7 @@ and the `tokens` it cost to produce.
 ## The arena
 
 ```
-phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--keep-turns 6] [--whole-turns 2] [--preload 3] [--closed] [--dash]
+phost-agent arena --scene <scene> --contestant [NAME=]PROVIDER[:MODEL] ... [--turns 30] [--submits 6] [--tokens N] [--keep-turns 6] [--whole-turns 1] [--preload 3] [--typed] [--closed] [--dash]
 ```
 
 `--dash` also starts phost-dash on this machine's loopback over the same state (`$PHOST_HOME`), prints its link before the first turn
@@ -191,8 +191,9 @@ tokens, 17k a turn, and the journal's split showed where: the input at turn 15 w
 2.3 characters a token, with 6.6k characters of system prompt, 10.8k of pinned cards, and 26.6k of window (six exchanges: the model's own
 code blocks and the results of `look`s at other entries' sources and failures). So the window was the largest part, the cards the
 second. Two changes, both measured on the same stored state and on a scripted contest: pinned cards start *compact* (the per-port
-comment in the skeleton, which repeated the ports table, and the judging sentence, the typed law, the implementations' parameters and
-the definitions of metrics that are not gated are left for a look at the stage, which pins the full card), 10.8k characters to 7.5k on
+comment in the skeleton, which repeated the ports table, and the judging sentence, the implementations' parameters and
+the definitions of metrics that are not gated are left for a look at the stage, which pins the full card; a stage's typed form stays on
+the compact card, see below), 10.8k characters to 7.5k on
 that scene, with the measured shapes also shortened of a library's internal module paths at render time (`warp._src.types.array` is
 `warp.array`; the probe's stored text is unchanged, because measuring it again costs minutes: a check in the sandbox compiles its
 kernels each time); and the older turns in the window are condensed as above. On the scripted contest (two contestants, 5 000-character
@@ -210,6 +211,37 @@ contest, because 8 of the 9 turns were `look`s at other entries' sources: each r
 62% of the prompt at turn 9 (24.8k of 39.9k characters; system 6.5k, pinned 8.6k), so `--whole-turns` now defaults to 1. That run also
 had an unreadable reply (15k in, 2.6k out, spent) whose text was not kept; the journal now keeps the first 600 characters of an
 unreadable reply as `reply_head`, and it re-looked at an entry it had read four turns earlier, which a cut result makes possible.
+
+**Typed forms, and a preview that costs no check.** A stage that declares an equation form has a `<stage>/expression` implementation when
+`phost_author.expression_impls` is loaded as a plugin (`--typed` on the arena command is `--plugin phost_author.expression_impls`): the candidate is a few lines of text in
+`params`, not a source file. For a solver stage (`effective.solve`, `newton.linear_solve`) that is a program (`init` once, `step` for
+`iterations` passes, over `rhs`, `diag`, `A @ name`, a few functions and reductions) that claims a relative residual `tolerance` and
+is held to it; a typed solver is judged as an approximate swap, and a generated one is for exploring an algorithm, not for beating the
+host's solve on speed. Kernels stay as they were: a contestant can still write a runtime class, and can build on either. Two things
+make the typed path cheap to take.
+
+- *The card says how.* A stage with a typed form carries it on its compact card (`typed.typed_note`): what the text may say, the
+  parameters with their ranges, the functions and reductions, and the default program to start from (a Jacobi-preconditioned conjugate
+  gradient for the solver stages). On `effective.solve` that is 1.3k characters more on the pinned card (1.9k to 3.2k characters, about
+  430 tokens a call, only for a stage that has a form), which is less than the turn a model otherwise spends looking at the stage to find
+  out that the form exists; the full card no longer prints the form as a raw dictionary or the default program a second time.
+- *`{"action": "preview", "stage": ..., "params": {...}, "variants": [{...}, ...]}`* runs the form on a sample and answers in a line for
+  the params and each variant, with no worker, no sandbox, no check, no timed run and no attempt record. For a solver: the relative residual after
+  passes 1, 2, 4, 8, ... and the last, where it first goes under the tolerance it claims (or that it never does), the error against a
+  direct solve, or the pass at which it stops being a number; `condition` (a number or a list) and `size` and `seed` choose the sample, which
+  is a random symmetric positive definite system of up to 64 unknowns. For a pointwise law it sweeps one input (`sweep`, `at`, `lo`, `hi`) and
+  gives the range of each output and the law's own damping; for a channel law, each channel's value on a sample. A variant is the params
+  with some of them changed, and a line that is not accepted (an unknown name, a parameter out of range) is told on its own line without
+  costing the others. At most 12 lines an answer. The preview is read by `phost_author` and nothing a contestant wrote as code runs in
+  it: the arithmetic is the checked expression language, NumPy, a bounded number of passes. It is offered in the system prompt only
+  when some stage has a form (about 70 tokens), and a closed contest can use it, since it shows nobody's work.
+
+What it is worth, measured by size and not yet by a model: four ideas (the default program at three iteration counts) are asked in 310
+characters and answered in 850, one call. The 19 kernel sources in the journal averaged 7.2k characters, and a kernel idea also costs the
+check turn that finds out whether it runs. What it cannot say: the sample is not this scene's system (its conditioning and structure are
+unknown to the preview), so a program that fails on it will fail the check and one that does well has only earned the check; and a
+typed solver's code still has to pass the check's `max_program_error` and `max_native_difference` gates. No live model has played
+with it yet. The test is to run the arena with the plugin and compare, at equal turns and tokens, the best entry against a run without it.
 
 **What ranks:** the board is `phost-score`'s: entries are compared only with entries on the same scene, device, world count and swap
 class, by the class's objectives (speedup for an exact swap; speed and accuracy together, as a Pareto front, for an approximate
