@@ -59,6 +59,7 @@ class Prepared:
     passed: set = field(default_factory=set)
     rejection: tuple[str, str, bool] | None = None          # (tier, reason, answered from the memo)
     seconds: dict[str, float] = field(default_factory=dict)
+    outputs: dict[str, str] = field(default_factory=dict)    # what the candidate printed at each tier that ran (or was remembered)
 
 
 class Funnel:
@@ -132,6 +133,8 @@ class Funnel:
         """Run one check tier if the memo has no answer. True when the candidate may go on."""
         stored = None if self.refresh else self.memo.lookup(p.key).get(memo_tier)
         if stored is not None:
+            if stored.get("output"):
+                p.outputs[memo_tier] = stored["output"]
             if not stored["ok"]:
                 p.rejection = (memo_tier, stored["reason"], True)
                 return False
@@ -155,18 +158,21 @@ class Funnel:
                 self.spend.gpu_seconds += seconds
             else:
                 self.spend.cpu_seconds += seconds
+        printed = dict(output=result.output) if result.output else {}
+        if result.output:
+            p.outputs[memo_tier] = result.output
         if result.status == "skipped":
-            self.memo.store(p.key, memo_tier, ok=True, reason=f"skipped: {result.reason}", seconds=seconds, skipped=True)
+            self.memo.store(p.key, memo_tier, ok=True, reason=f"skipped: {result.reason}", seconds=seconds, skipped=True, **printed)
             p.passed.add(memo_tier)
             return True
         if result.ok:
-            self.memo.store(p.key, memo_tier, ok=True, seconds=seconds, host=result.host, metrics=result.metrics)
+            self.memo.store(p.key, memo_tier, ok=True, seconds=seconds, host=result.host, metrics=result.metrics, **printed)
             p.passed.add(memo_tier)
             return True
         reason = result.message()
         if not result.transient:
             self.memo.store(p.key, memo_tier, ok=False, reason=reason, seconds=seconds, host=result.host,
-                            failures=result.failures)
+                            failures=result.failures, **printed)
         p.rejection = (memo_tier, reason, False)
         return False
 

@@ -9,6 +9,7 @@ from typing import Any, Mapping, Sequence
 import phost
 
 from .cards import JUDGING, stage_card
+from .diagnostics import LIMIT
 
 INTRO = """\
 You are one of several language models competing on a leaderboard. Everyone is given the same simulator scene. The board ranks
@@ -22,7 +23,8 @@ How entries are judged (the rules, not advice):
 - An entry is a graph: for each stage it replaces, either a registered implementation with parameters or the source of a Python
   runtime class. Stages it does not name stay the host's own.
 - Each replaced stage is run through that stage's contract checks against a float64 reference before anything is timed. `check`
-  runs only these, and costs a turn, not a timed run.
+  runs only these, and costs a turn, not a timed run. Whatever your runtime `print`s while they run comes back with the result,
+  passed or failed (the first {printed} characters; identical lines in a row are folded).
 - A timed run steps the scene with your graph and with the host's own graph from the same start state, at several world counts,
   and measures the speed ratio and how far your trajectory drifts from the host's. Timed runs have the device to themselves and
   are the scarce thing: you have a fixed number.
@@ -97,9 +99,9 @@ def system_prompt(*, registry: phost.Registry, stages: Sequence[str], facts: str
     visibility = ("Everything you submit, source included, is visible to the other contestants, as theirs is to you." if open_code
                   else "Entries show on the board with what they scored, but not what they submitted.")
     if open_code and feed:
-        visibility += (" So is every check anyone runs, passed or failed: each turn you are shown the others' latest ones under the "
-                       "board, and you can look at any by its id.")
-    rules = RULES.format(classes=classes_text(registry, stages), visibility=visibility)
+        visibility += (" So is every check anyone runs, passed or failed, with what it printed: each turn you are shown the others' "
+                       "latest ones under the board, and you can look at any by its id.")
+    rules = RULES.format(classes=classes_text(registry, stages), visibility=visibility, printed=LIMIT)
     return (INTRO + f"\nScene: {scene}. World counts timed: {', '.join(map(str, worlds))}; the board you see is for {max(worlds)} worlds.\n"
             f"Your budget: {turns} turns and {submits} timed runs. The contest ends for you when either is used up; "
             f"there is no other way to leave.\n\n" + facts + "\n\nStages you can replace:\n"
@@ -170,7 +172,12 @@ def what_text(record: Mapping[str, Any]) -> str:
 def outcome_text(record: Mapping[str, Any], limit: int | None = 150) -> str:
     """Whether a check passed, or the first stage's reason it did not (cut to ``limit`` characters; None for all of it)."""
     if record["ok"]:
-        return "passed the checks"
-    first = record["reasons"][0]
-    reason = " ".join(str(first["reason"]).split())
-    return f"FAILED at the {first['tier']} tier: " + (reason if limit is None or len(reason) <= limit else reason[:limit] + "...")
+        text = "passed the checks"
+    else:
+        first = record["reasons"][0]
+        reason = " ".join(str(first["reason"]).split())
+        text = f"FAILED at the {first['tier']} tier: " + (reason if limit is None or len(reason) <= limit else reason[:limit] + "...")
+    printed = next((" ".join(o["text"].split()) for o in record.get("output", ()) if o["text"].strip()), "")
+    if printed and limit is not None:                           # a stub: `look` at the attempt has all of it
+        text += "; its runtime printed: " + (printed if len(printed) <= 80 else printed[:80] + "...")
+    return text

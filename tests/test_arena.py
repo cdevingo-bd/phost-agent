@@ -346,3 +346,58 @@ def test_parse_action_reads_tagged_source_blocks_and_ignores_braces_inside_them(
     assert action["action"] == "check" and blocks[0][0] == "s" and "t = " in blocks[0][1] and blocks[1][0] == ""
     with pytest.raises(ValueError, match="action"):
         parse_action('{"proposal": {}}')
+
+
+# ---- what a runtime prints while a check runs --------------------------------------------------------------------------------------
+
+def printing_check(request, **kw):
+    return CheckResult("pass", host="chain", metrics={"max_relative_residual": 1e-9},
+                       output=f"{request['tier']}: W=2 h=(2, 4, 4) float32\nsolve called  (x3)")
+
+
+def test_the_prompt_says_what_a_runtime_may_print_and_that_the_others_see_it_too(tmp_path, registry):
+    a = arena(tmp_path, registry, ("a", Model()))
+    a.run()
+    assert "Whatever your runtime `print`s while they run comes back with the result" in a.system and "4000 characters" in a.system
+    assert "with what it printed" in a.system
+
+
+def test_a_check_returns_what_the_runtime_printed_whether_it_passed_or_not_and_the_others_can_read_it(tmp_path, registry):
+    alpha = Model(act(action="check", graph=PASSING), act(action="check", graph=PASSING))
+    beta = Model(act(action="look", what="attempt", id="__first__"))
+    a = arena(tmp_path, registry, ("alpha", alpha), ("beta", beta), check=printing_check, turns=3)
+    a.run()
+    own = alpha.calls[1]["messages"][-1]["content"]                               # alpha's own answer to its first check
+    assert "The contract checks pass for every stage" in own
+    assert f"printed by {OTHER} at the cheap tier:\n    cheap: W=2 h=(2, 4, 4) float32\n    solve called  (x3)" in own
+    assert f"printed by {OTHER} at the real tier:\n    real: W=2" in own
+    seen = beta.calls[0]["messages"][-1]["content"]                                # beta sees a stub in the feed
+    assert "passed the checks; its runtime printed: cheap: W=2 h=(2, 4, 4) float32 solve called (x3)" in seen
+    [first, _] = a.attempts()
+    assert [o["tier"] for o in first["output"]] == ["cheap", "real"] and first["output"][0]["stage"] == OTHER
+    looker = Model(act(action="look", what="attempt", id=first["id"]))
+    arena(tmp_path, registry, ("gamma", looker), turns=2).run()
+    assert "- printed by %s at the cheap tier:\n    cheap: W=2 h=(2, 4, 4) float32" % OTHER in looker.calls[1]["messages"][-1]["content"]
+
+
+def test_a_repeated_check_shows_what_was_printed_the_first_time_without_running_it_again(tmp_path, registry):
+    alpha = Model(act(action="check", graph=PASSING), act(action="check", graph=PASSING))
+    checks = []
+    a = arena(tmp_path, registry, ("alpha", alpha), check=lambda request, **kw: checks.append(request["tier"]) or printing_check(request),
+              turns=3)
+    a.run()
+    assert len(a.attempts()) == 2 and checks == ["cheap", "real"]                  # the second check ran nothing
+    again = alpha.calls[2]["messages"][-1]["content"]
+    assert "This exact graph was already checked by you on turn 1" in again and "cheap: W=2 h=(2, 4, 4) float32" in again
+
+
+def test_a_failing_check_that_printed_keeps_the_reason_and_the_output(tmp_path, registry):
+    def check(request, **kw):
+        return CheckResult("fail", host="chain", failures=["residual too big: 3e-2"], output="W=2")
+
+    alpha = Model(act(action="check", graph=FAILING))
+    a = arena(tmp_path, registry, ("alpha", alpha), check=check, turns=1)
+    a.run()
+    [attempt] = a.attempts()
+    assert attempt["output"] == [dict(stage=STAGE, tier="cheap", text="W=2")] and not attempt["ok"]
+    assert "residual too big" in attempt["reasons"][0]["reason"]

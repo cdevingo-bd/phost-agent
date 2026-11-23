@@ -106,7 +106,8 @@ contestant plays until its turns, its timed runs or its tokens are spent, or unt
 model) removes it. In an open contest every `check` anyone runs is posted, passed or failed, with who ran it and the reason it failed: each
 turn shows the others' latest ten (`--feed N`, 0 for none) as one line each, and `look` with `"what": "attempt"` and an id gives the
 source and the whole reason. A graph checked before, by anyone, is answered with who checked it and what came of it. `--closed` posts
-and shows nothing; the checks are still in the journal. A graph replaces any
+and shows nothing; the checks are still in the journal. Whatever a runtime `print`s while a check runs comes back with the result,
+passed or failed (the first 4000 characters, identical lines in a row folded), and is posted with the check; see below. A graph replaces any
 set of stages, each with a registered implementation and parameters or with the source of a runtime class. A second model that builds
 on the first's entry is a legitimate move, and is why the contest is open by default.
 
@@ -244,6 +245,17 @@ no API key): they read the stage card, wrote source, checked it and timed it. Th
 step (0.07x to 0.55x), so no win is claimed, and nothing here says which model does better. Much of their early turns went to learning
 what a runtime looks like from failing checks, because the card did not say; it now does, and the checks are shared (the feed above).
 That was before those two changes, so their effect on turns is unmeasured.
+
+Two later contests on the same scene, read from the journal (27 checks): **19 of the 27 were failures on purpose.** A candidate computed
+something (a host fact, an array's shape and dtype, whether `scipy` imports, the microseconds a variant takes on the real inputs) and
+raised `RuntimeError("PROBE ...")` or `("BENCH ...")` so the answer came back in the failure reason, because a check had no other way to
+say anything: a candidate's `print` was discarded. 6 passed and 2 were defects. Of 52 candidate sources written, none printed and 36
+raised. A check that fails on purpose also cannot say whether the code was right, so every measurement cost a turn that verified
+nothing. A runtime's `print` is now captured in the check worker (`diagnostics.py`, only calls made from the candidate's own module),
+returned with the result at each tier it ran, kept in the memo so a repeated check shows it again without running, and posted with the
+check in open contests. It takes nothing away: raising still works, and nothing is restricted. Whether it lowers the share of probes
+is not measured; the next contest will say. In those same contests entries did rank faster than the host's own step (about 11.9 to
+12.3x at 1 world and 5.3 to 5.7x at 8, exact class, float64 tridiagonal solves), self-reported and not independently checked.
 
 Not done: no MJX engine (there is a JAX chain, `jaxchain`, and that is not MuJoCo). **The Claude API, OpenAI-protocol and cmd providers
 have not been called against a real service.** They, the focused search and the arena are tested end to end with the real loop, funnel, scene and CLI, but against programs standing in

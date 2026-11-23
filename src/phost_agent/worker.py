@@ -17,6 +17,8 @@ import json
 import sys
 import traceback
 
+from .diagnostics import Diagnostics, install
+
 PREFIX = "PHOST_AGENT_RESULT "
 
 
@@ -63,6 +65,13 @@ def real_host(scene, worlds: int):
 
 def main() -> int:
     request = json.loads(sys.stdin.read())
+    diagnostics = Diagnostics()
+    install(diagnostics)                 # what the candidate prints comes back with the result, pass or fail
+
+    def emit(**payload) -> None:
+        printed = diagnostics.text()
+        print(PREFIX + json.dumps(dict(payload, **(dict(output=printed) if printed else {}))), flush=True)
+
     try:
         if request.get("candidate_dir"):
             sys.path.insert(0, request["candidate_dir"])
@@ -77,7 +86,7 @@ def main() -> int:
         if request["tier"] == "cheap":
             built = cheap_host(stage)
             if built is None:
-                print(PREFIX + json.dumps(dict(status="skipped", reason="no simulator-free host offers this stage")), flush=True)
+                emit(status="skipped", reason="no simulator-free host offers this stage")
                 return 0
             host, host_name = built
             scope = None
@@ -90,19 +99,17 @@ def main() -> int:
             verdict = check_impl(host, selection, registry)
         except phost.ApplicabilityError as error:
             if request["tier"] == "cheap":
-                print(PREFIX + json.dumps(dict(status="skipped", host=host_name,
-                                               reason=f"does not apply on the {host_name} host: {error}")), flush=True)
+                emit(status="skipped", host=host_name, reason=f"does not apply on the {host_name} host: {error}")
                 return 0
             raise
         finally:
             if scope is not None:
                 scope.__exit__(None, None, None)
-        print(PREFIX + json.dumps(dict(status="pass" if verdict.ok else "fail", host=host_name, failures=list(verdict.failures),
-                                       metrics={k: float(v) for k, v in verdict.metrics.items()})), flush=True)
+        emit(status="pass" if verdict.ok else "fail", host=host_name, failures=list(verdict.failures),
+             metrics={k: float(v) for k, v in verdict.metrics.items()})
         return 0
     except BaseException as error:
-        print(PREFIX + json.dumps(dict(status="error", error=f"{type(error).__name__}: {error}",
-                                       traceback=traceback.format_exc()[-3000:])), flush=True)
+        emit(status="error", error=f"{type(error).__name__}: {error}", traceback=traceback.format_exc()[-3000:])
         return 1
 
 

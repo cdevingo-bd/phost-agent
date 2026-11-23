@@ -144,3 +144,33 @@ def test_a_whole_search_on_the_chain_engine_wrong_then_right_then_known(tmp_path
     assert report.outcomes[2].memo and report.outcomes[2].speedup == report.outcomes[1].speedup
     assert report.funnel()["proposed"] == 3 and report.spend.timed_runs == 1 and report.spend.memo_hits == 1
     assert journal.verify().ok and ledger.verify().ok and len(list(ledger)) == 1
+
+
+# ---- what a candidate prints --------------------------------------------------------------------------------
+
+PRINTING_SOLVER = GOOD_SOLVER.replace("        nv = self.host.facts().nv\n",
+                                      "        nv = self.host.facts().nv\n        print('W=%d h=%s' % (s.h.shape[0], s.h.dtype))\n")
+
+
+@pytest.mark.parametrize("tier", ["cheap", "real"])
+def test_a_candidate_that_prints_gets_its_output_back_with_a_passing_check(tier, tmp_path):
+    req, cand = source_request(PRINTING_SOLVER, tier, tmp_path)
+    done = run_check(req, untrusted=True, allow_unsandboxed=True, candidate_dir=cand.directory)
+    assert done.ok, done.message()
+    assert done.output.startswith("W=") and "float" in done.output and done.to_dict()["output"] == done.output
+
+
+def test_what_a_candidate_printed_comes_back_when_the_check_fails_or_the_code_raises(tmp_path):
+    wrong = PRINTING_SOLVER.replace("solve(upper", "solve(1.01 * upper")
+    req, cand = source_request(wrong, "cheap", tmp_path)
+    failed = run_check(req, untrusted=True, allow_unsandboxed=True, candidate_dir=cand.directory)
+    assert failed.status == "fail" and failed.output.startswith("W=")
+    raising = PRINTING_SOLVER.replace("        nv = self.host.facts().nv\n", "        nv = self.host.facts().nv\n        raise RuntimeError('PROBE')\n", 1)
+    req, cand = source_request(raising, "cheap", tmp_path)
+    errored = run_check(req, untrusted=True, allow_unsandboxed=True, candidate_dir=cand.directory)
+    assert errored.status == "error" and "PROBE" in errored.reason
+
+
+def test_a_candidate_that_prints_nothing_returns_no_output(tmp_path):
+    req, cand = source_request(GOOD_SOLVER, "cheap", tmp_path)
+    assert run_check(req, untrusted=True, allow_unsandboxed=True, candidate_dir=cand.directory).output == ""

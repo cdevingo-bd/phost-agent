@@ -181,9 +181,11 @@ class Arena:
         digest = self._digest(prepared)
         earlier = [r for r in self.attempts() if r.get("digest") == digest and (self.open_code or r["contestant"] == c.name)]
         reasons = [dict(stage=s, tier=p.rejection[0], reason=str(p.rejection[1])[:1200]) for s, p in prepared.items() if p.rejection]
+        printed = [dict(stage=s, tier=tier, text=text) for s, p in prepared.items() for tier, text in p.outputs.items()]
         attempt_id = hashlib.sha256(f"{self.task.scene}|{c.name}|{c.turns}|{time.time()}".encode()).hexdigest()[:8]
         self.journal.append("arena", phase="attempt", id=attempt_id, contestant=c.name, turn=c.turns, scene=self.task.scene,
-                            action=action, ok=ok, digest=digest, graph=dict(stages=self._spec(graph)), reasons=reasons)
+                            action=action, ok=ok, digest=digest, graph=dict(stages=self._spec(graph)), reasons=reasons,
+                            **(dict(output=printed) if printed else {}))
         if not earlier:
             return ""
         before = earlier[-1]
@@ -208,6 +210,8 @@ class Arena:
             else:
                 parts.append(f"{stage}: {spec.get('impl')} {spec.get('params') or ''}".rstrip())
         parts += [f"- {r['stage']}: rejected at the {r['tier']} tier: {r['reason']}" for r in record["reasons"]]
+        for o in record.get("output", ()):
+            parts.append(f"- printed by {o['stage']} at the {o['tier']} tier:\n" + "\n".join("    " + line for line in o["text"].splitlines()))
         return "\n".join(parts)
 
     # ---- the board --------------------------------------------------------------------------------------
@@ -394,6 +398,9 @@ class Arena:
                 lines.append(f"- {stage}: rejected at the {tier} tier: {reason}" + (" (answered from the memo)" if memo else ""))
             else:
                 lines.append(f"- {stage}: passes " + ", ".join(t for t in ("static", "cheap", "real") if t in p.passed))
+            for tier, text in p.outputs.items():
+                lines.append(f"  printed by {stage} at the {tier} tier:")
+                lines += ["    " + line for line in text.splitlines()]
         return lines, ok
 
     def _check(self, c: Contestant, graph: Mapping[str, Proposal]) -> str:

@@ -33,6 +33,7 @@ class CheckResult:
     seconds: float = 0.0
     sandbox: str = "none"
     transient: bool = False                  # a timeout or a missing result: about this run, not about the candidate (not memoized)
+    output: str = ""                         # what the candidate printed while the check ran (see diagnostics.py)
 
     @property
     def ok(self) -> bool:
@@ -45,7 +46,8 @@ class CheckResult:
 
     def to_dict(self) -> dict[str, Any]:
         return dict(status=self.status, host=self.host, failures=list(self.failures), metrics=dict(self.metrics),
-                    reason=self.reason, seconds=round(self.seconds, 4), sandbox=self.sandbox, transient=self.transient)
+                    reason=self.reason, seconds=round(self.seconds, 4), sandbox=self.sandbox, transient=self.transient,
+                    output=self.output)
 
 
 def sandbox_available() -> bool:
@@ -99,6 +101,7 @@ def run_check(request: Mapping[str, Any], *, untrusted: bool = False, allow_unsa
                            sandbox=kind, seconds=seconds, transient=True)
     status = payload["status"]
     if status == "error":
-        return CheckResult("error", reason=payload["error"], sandbox=kind, seconds=seconds)
+        return CheckResult("error", reason=payload["error"], sandbox=kind, seconds=seconds, output=payload.get("output", ""))
     return CheckResult(status, host=payload.get("host", ""), failures=payload.get("failures", []),
-                       metrics=payload.get("metrics", {}), reason=payload.get("reason", ""), sandbox=kind, seconds=seconds)
+                       metrics=payload.get("metrics", {}), reason=payload.get("reason", ""), sandbox=kind, seconds=seconds,
+                       output=payload.get("output", ""))
